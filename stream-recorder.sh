@@ -4,10 +4,10 @@
 
 # --- KONFIGURATION ---
 input_file="$HOME/stream_recorder.txt"
-base_save_dir="$HOME/stream_videos"
+base_save_dir="$HOME/twitch_videos"
 log_file="$HOME/stream_history.log"
 config_file="$HOME/.ffmpeg_threads_config"
-temp_dir="/tmp/stream_locks"
+temp_dir="/tmp/twitch_locks"
 today=$(date +%Y%m%d)
 # ---------------------
 
@@ -89,65 +89,63 @@ while true; do
     fi
 
     # Läs textfilen rad för rad
-    while IFS= read -r actor || [[ -n "$actor" ]]; do
-        [[ -z "$actor" ]] && continue
-
-        # Definiera unik lock-fil baserat på datum och streamernamn
-        lock_file="$temp_dir/${today}-${actor}.lock"
+    # Vi sätter IFS till att dela på TAB, LF (\n) och CR (\r)
+    # Detta hanterar automatiskt alla tre formaten utan att krascha
+    while IFS=$'\t\n\r' read -d '' -r -a actor_list || [ ${#actor_list[@]} -gt 0 ]; do
         
-        # Om filen redan finns körs denna streamer i ett annat terminalfönster
-        if [[ -f "$lock_file" ]]; then
-            echo "--- $actor körs redan idag i ett annat fönster. Hoppar över. ---"
-            continue
-        fi
-
-        url="https://example.com/${actor}"
-        current_actor_dir="$base_save_dir/$actor"
-        mkdir -p "$current_actor_dir"
-
-        echo "--- Kollar: $actor ---"
-        
-        # Skapa låsfilen precis innan yt-dlp startar
-        touch "$lock_file"
-        start_time=$(date "+%Y-%m-%d %H:%M:%S")
-        
-        # Starta yt-dlp med angivna argument och spara i unik undermapp
-        # Kör yt-dlp med array-variabeln i loopen
-        # yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate \
-        #    $ffmpeg_args \
-        #    -o "$current_actor_dir/%(title)s - %(upload_date)s.%(ext)s" \
-        #    "$url"
-
-        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "${ffmpeg_args[@]}" -o "$current_actor_dir/%(title)s - %(upload_date)s.%(ext)s" "$url"
-
-        status=$?
-        
-        # Ta omedelbart bort låsfilen när yt-dlp har kört klart eller misslyckats
-        rm -f "$lock_file"
-
-        # Om status är 0 lyckades yt-dlp (streamen var online och har laddats ner)
-        if [ $status -eq 0 ]; then
-            end_time=$(date "+%Y-%m-%d %H:%M:%S")
-            log_entry="[$start_time till $end_time] $actor ONLINE"
+        for actor in "${actor_list[@]}"; do
+            # Ta bort eventuella dolda eller kvarvarande kontrolltecken från Windows (CRLF)
+            actor=$(echo "$actor" | tr -d '\r\n\t ')
             
-            # Hämta titeln via yt-dlp om källan är Twitch
-            if [[ "$url" == *"twitch.tv"* ]]; then
-                title=$(yt-dlp --get-title --no-check-certificate "$url" 2>/dev/null)
-                log_entry="$log_entry - Titel: $title"
+            # Hoppa över om raden/fältet blev tomt
+            [[ -z "$actor" ]] && continue
+
+            # Lock-fil med datum
+            lock_file="$temp_dir/${today}-${actor}.lock"
+            
+            if [[ -f "$lock_file" ]]; then
+                echo "--- $actor körs redan idag i ett annat fönster. Hoppar över. ---"
+                continue
             fi
-            
-            echo "$log_entry" >> "$log_file"
-        else
-            # Om streamern var offline: generera slumpmässig paus mellan 2 och 15 sekunder
-            wait_time=$(( ( RANDOM % 14 ) + 2 ))
-            echo "Offline: Väntar $wait_time sekunder..."
-            
-            # Vänta, men avbryt om användaren trycker 'q'
-            read -t "$wait_time" -n 1 key
-            [[ $key == "q" ]] && cleanup_and_exit
-        fi
-    done < "$input_file"
 
+            url="https://example.com/${actor}"
+            current_actor_dir="$base_save_dir/$actor"
+            mkdir -p "$current_actor_dir"
+
+            echo "--- Kollar: $actor ---"
+            # Skapa låsfilen precis innan yt-dlp startar            
+            touch "$lock_file"
+            start_time=$(date "+%Y-%m-%d %H:%M:%S")
+            
+            # Kör yt-dlp på en enda rad
+            # Starta yt-dlp med angivna argument och spara i unik undermapp
+            # Kör yt-dlp med array-variabeln i loopen            
+            yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "${ffmpeg_args[@]}" -o "$current_actor_dir/%(title)s - %(upload_date)s.%(ext)s" "$url"
+            
+            status=$?
+            # Ta omedelbart bort låsfilen när yt-dlp har kört klart eller misslyckats
+            rm -f "$lock_file"
+
+            # Om status är 0 lyckades yt-dlp (streamen var online och har laddats ner)
+            if [ $status -eq 0 ]; then
+                end_time=$(date "+%Y-%m-%d %H:%M:%S")
+                log_entry="[$start_time till $end_time] $actor ONLINE"
+            # Hämta titeln via yt-dlp om källan är Twitch                
+                if [[ "$url" == *"twitch.tv"* ]]; then
+                    title=$(yt-dlp --get-title --no-check-certificate "$url" 2>/dev/null)
+                    log_entry="$log_entry - Titel: $title"
+                fi
+                echo "$log_entry" >> "$log_file"
+            else
+                wait_time=$(( ( RANDOM % 14 ) + 2 ))
+                echo "Offline: Väntar $wait_time sek..."
+                # Vänta, men avbryt om användaren trycker 'q'
+                read -t "$wait_time" -n 1 key
+                [[ $key == "q" ]] && cleanup_and_exit
+            fi
+        done
+    done < "$input_file"
+   
     # Kort paus efter att hela listan har gåtts igenom en gång
     read -t 5 -n 1 key
     [[ $key == "q" ]] && cleanup_and_exit
