@@ -48,14 +48,27 @@ if [[ -n "$key" ]]; then
     echo -e "\nHoppar över fördröjningen och startar direkt..."
 fi
 
-# 3. NYTT: För-skanning av textfilen efter clean(yes/no)
+# 3. För-skanning av textfilen efter clean(yes/no) och overwrite(yes/no)
 auto_clean=""
+overwrite_mode="--no-overwrites" # Standardbeteende om det inte anges i filen
+
 if [[ -f "$input_file" ]]; then
-    # Letar efter clean(yes) eller clean(no) (struntar i skiftläge och kommentarer)
+    # Kolla clean-inställning
     if grep -iq "^[[:space:]]*clean(yes)" "$input_file"; then
         auto_clean="yes"
     elif grep -iq "^[[:space:]]*clean(no)" "$input_file"; then
         auto_clean="no"
+    fi
+
+    # NYTT: Kolla overwrite-inställning
+    if grep -iq "^[[:space:]]*overwrite(yes)" "$input_file"; then
+        overwrite_mode="--force-overwrites"
+        echo "System: Överskrivning AKTIVERAD (overwrite=yes). Gamla filer skrivs över."
+    elif grep -iq "^[[:space:]]*overwrite(no)" "$input_file"; then
+        overwrite_mode="--no-overwrites"
+        echo "System: Överskrivning INAKTIVERAD (overwrite=no). Befintliga filer hoppas över."
+    else
+        echo "System: Ingen overwrite-inställning hittades. Använder standard (hoppa över befintliga filer)."
     fi
 fi
 
@@ -64,13 +77,12 @@ old_locks=$(find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" 2>/dev/nul
 
 if [[ -n "$old_locks" ]]; then
     if [[ "$auto_clean" == "yes" ]]; then
-        # Automatisk rensning (Tyst)
         find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" -delete 2>/dev/null
     elif [[ "$auto_clean" == "no" ]]; then
-        # Automatisk ignorering (Tyst)
-        : # Gör ingenting
+            # Automatisk ignorering (Tyst)
+        : # Gör ingenting 
     else
-        # Inget kommando hittades i filen - ställ den vanliga frågan
+        # Inget kommando hittades i filen - ställ den vanliga frågan    
         echo "Hittade gamla lock-filer från tidigare dagar."
         read -p "Vill du rensa gamla låsfiler innan start? (j/n): " purge_choice
         if [[ "$purge_choice" =~ ^(j|J|ja|JA)$ ]]; then
@@ -184,13 +196,13 @@ echo "Bevakning startad ($today). Logg sparas i: $log_file"
 while true; do
     if [[ ! -f "$input_file" ]]; then
         echo "Hittar inte listan. Skapar en ny automatisk fil på: $input_file"
-        echo "# Lägg till Webbsida-namn, hela URL-adresser, delay(sekunder) eller url(länk, \"Mappnamn\") här" > "$input_file"
+        echo "# Lägg till Webbsite(Webbsajt)-namnet, hela URL-adresser, delay(sekunder) eller url(länk, \"Mappnamn\") här" > "$input_file"
         echo "# Rader som börjar med # hoppas över automatiskt" >> "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     elif [[ ! -s "$input_file" ]]; then
         echo "Fel: Listan ($input_file) är helt tom (0 kb)."
-        echo "# Lägg till Webbsida-namn, hela URL-adresser, delay(sekunder) eller url(länk, \"Mappnamn\") här" > "$input_file"
+        echo "# Lägg till Webbsite(Webbsajt)-namnet, hela URL-adresser, delay(sekunder) eller url(länk, \"Mappnamn\") här" > "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     fi
@@ -207,9 +219,9 @@ while true; do
         item=$(echo "$clean_line" | xargs)
         
         [[ -z "$item" ]] && continue
-
-        # --- NY FUNKTION: Hoppa över clean(yes) och clean(no) i loopen ---
-        if [[ "$item" =~ ^[cC]lean\( ]]; then
+        
+        # --- NY FUNKTION: Hoppa över både clean() och overwrite() i loopen ---
+        if [[ "$item" =~ ^[cC]lean\( || "$item" =~ ^[oO]verwrite\( ]]; then
             continue
         fi
 
@@ -289,7 +301,8 @@ while true; do
         fi
 
         # Kör yt-dlp och stäng dess stdin
-        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "${ffmpeg_args[@]}" \
+        # NYTT: Vi har lagt till variabeln "$overwrite_mode" i kommandot
+        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$overwrite_mode" "${ffmpeg_args[@]}" \
             -o "$output_template" "$url" </dev/null
         
         status=$?
