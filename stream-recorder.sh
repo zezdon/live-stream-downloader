@@ -2,20 +2,37 @@
 
 # --- KONFIGURATION ---
 
-save_dir=$HOME/stream_videos  # Mappen där videon ska sparas
-input_file=stream_recorder.txt    # Sökvägen till din textfil
+base_save_dir=$HOME/stream_videos
+input_file=stream_recorder.txt
 
 # ---------------------
 
 # Skapa mappen om den inte redan finns
-mkdir -p $save_dir
+mkdir -p $base_save_dir
 
-echo "Startar bevakning på Raspberry Pi. Tryck 'q' för att avsluta."
+# Funktion för att städa upp vid avslut
+cleanup_and_exit() {
+    echo -e "\n"
+    read -p "Vill du behålla de nedladdade filerna? (j/n): " choice
+    case "$choice" in 
+        n|N|nej|NEJ)
+            echo "Rensar mappar och filer i $base_save_dir..."
+            # Gå igenom undermapparna och radera dem
+            for dir in $base_save_dir/*/; do
+                if [ -d $dir ]; then
+                    rm -rf $dir
+                fi
+            done
+            echo "Klart. Alla undermappar är borttagna."
+            ;;
+        *)
+            echo "Filerna behålls."
+            ;;
+    esac
+    exit 0
+}
 
-
-#cd $save_dir/$actor
-
-echo "Variablen: ${save_dir}"
+echo "Bevakar streamers. Tryck 'q' mellan kollarna för att avsluta."
 
 while true; do
     if [[ ! -f $input_file ]]; then
@@ -26,36 +43,32 @@ while true; do
     while IFS= read -r actor || [[ -n $actor ]]; do
         [[ -z $actor ]] && continue
 
+        # Skapa unik undermapp för streamern
+        current_actor_dir=$base_save_dir/$actor
+        mkdir -p $current_actor_dir
+
         echo "--- Kollar: $actor ---"
+        
+        # -o anger nu undermappen specifikt för denna actor
 
-        mkdir -p $save_dir/$actor
-        cd $save_dir/$actor
-
-        echo "--- Kollar: $save_dir/$actor ---"
-
-        # Kör yt-dlp med fast sökväg (-o)
-        # Filnamnet blir: Streamer_Namn - Titel - Datum.mp4
-        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate https://twitch.tv/${actor}
+        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate  -o $current_actor_dir/$actor https://example.com/${actor} 
         
         status=$?
 
-        # Om streamern är offline (yt-dlp misslyckas)
         if [ $status -ne 0 ]; then
             wait_time=$(( ( RANDOM % 14 ) + 2 ))
-            echo "Offline: Väntar $wait_time sekunder innan nästa..."
-            
+            echo "Offline: Väntar $wait_time sekunder..."
             read -t $wait_time -n 1 key
-            if [[ $key == "q" ]]; then
-                echo -e "\nAvslutar..."
-                exit 0
-            fi
+            [[ $key == "q" ]] && cleanup_and_exit
         else
-            echo "Nedladdning klar för $actor. Går vidare direkt."
+            # Ge en liten chans att trycka 'q' även efter lyckad nerladdning
+            read -t 1 -n 1 key
+            [[ $key == "q" ]] && cleanup_and_exit
         fi
 
     done < $input_file
 
-    echo "Listan klar. Startar om strax..."
+    echo "Listan klar. Startar om..."
     read -t 5 -n 1 key
-    [[ $key == "q" ]] && exit 0
+    [[ $key == "q" ]] && cleanup_and_exit
 done
