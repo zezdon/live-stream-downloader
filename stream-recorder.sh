@@ -48,15 +48,35 @@ if [[ -n "$key" ]]; then
     echo -e "\nHoppar över fördröjningen och startar direkt..."
 fi
 
-# 3. Kolla efter gamla lock-filer som inte tillhör dagens datum
+# 3. NYTT: För-skanning av textfilen efter clean(yes/no)
+auto_clean=""
+if [[ -f "$input_file" ]]; then
+    # Letar efter clean(yes) eller clean(no) (struntar i skiftläge och kommentarer)
+    if grep -iq "^[[:space:]]*clean(yes)" "$input_file"; then
+        auto_clean="yes"
+    elif grep -iq "^[[:space:]]*clean(no)" "$input_file"; then
+        auto_clean="no"
+    fi
+fi
+
+# Kolla efter gamla lock-filer som inte tillhör dagens datum
 old_locks=$(find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" 2>/dev/null)
 
 if [[ -n "$old_locks" ]]; then
-    echo "Hittade gamla lock-filer från tidigare dagar."
-    read -p "Vill du rensa gamla låsfiler innan start? (j/n): " purge_choice
-    if [[ "$purge_choice" =~ ^(j|J|ja|JA)$ ]]; then
+    if [[ "$auto_clean" == "yes" ]]; then
+        # Automatisk rensning (Tyst)
         find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" -delete 2>/dev/null
-        echo "Gamla låsfiler raderade."
+    elif [[ "$auto_clean" == "no" ]]; then
+        # Automatisk ignorering (Tyst)
+        : # Gör ingenting
+    else
+        # Inget kommando hittades i filen - ställ den vanliga frågan
+        echo "Hittade gamla lock-filer från tidigare dagar."
+        read -p "Vill du rensa gamla låsfiler innan start? (j/n): " purge_choice
+        if [[ "$purge_choice" =~ ^(j|J|ja|JA)$ ]]; then
+            find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" -delete 2>/dev/null
+            echo "Gamla låsfiler raderade."
+        fi
     fi
 fi
 
@@ -119,7 +139,7 @@ cleanup_and_exit() {
             echo "Alla mappar och filer har raderats."
             exit 0
         else
-            echo "Radering avbruten. Rensar tomma mappar men behåller dina inspelningar..."
+            echo "Rering avbruten. Rensar tomma mappar men behåller dina inspelningar..."
             find "$base_save_dir" -mindepth 1 -type d -empty -delete
             echo "Klara inspelningar sparades. Tomma mappar togs bort."
         fi
@@ -188,6 +208,11 @@ while true; do
         
         [[ -z "$item" ]] && continue
 
+        # --- NY FUNKTION: Hoppa över clean(yes) och clean(no) i loopen ---
+        if [[ "$item" =~ ^[cC]lean\( ]]; then
+            continue
+        fi
+
         # --- FUNKTION: Kolla efter delay(sekunder) ---
         if [[ "$item" =~ ^[dD]elay\(([0-9]+)\)$ ]]; then
             custom_delay="${BASH_REMATCH[1]}"
@@ -217,12 +242,12 @@ while true; do
             # 1. Klipp ut allt efter "url(" fram till kommatecknet
             extracted_url=$(echo "$item" | sed -E "s/^[uU]rl\(([^,]+),.*/\1/" | xargs)
             
-            # 2. Klipp ut allt efter kommatecknet till slutet av raden
+            # 2. Klipp ut allt efter kommatecknet till slutet av raden            
             extracted_folder=$(echo "$item" | cut -d',' -f2-)
-            
-            # 3. Tvätta mappnamnet: ta bort slutparentes och alla typer av citationstecken
+
+            # 3. Tvätta mappnamnet: ta bort slutparentes och alla typer av citationstecken            
             custom_folder=$(echo "$extracted_folder" | tr -d ')"' | tr -d "'" | xargs)
-            
+
             # 4. Sätt variabeln item till den rena länken
             item="$extracted_url"
             
@@ -240,7 +265,7 @@ while true; do
         elif [[ "$item" == *twitch.tv* ]]; then
             url="https://${item}"
         else
-            url="https://example.com/${item}"
+            url="https://example.com{item}"
         fi
 
         safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
