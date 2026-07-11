@@ -3,8 +3,13 @@
 sleep 10
 
 # --- KONFIGURATION ---
+# Tar reda på mappen där scriptet ligger
 script_dir=$(dirname "$(readlink -f "$0")")
-input_file="$script_dir/stream_recorder.txt"
+
+# NYTT: Sätter namnet på textfilen till samma som scriptet, fast med .txt
+script_name="${0##*/}"
+script_base="${script_name%.sh}"
+input_file="$script_dir/${script_base}.txt"
 
 base_save_dir="$HOME/stream_videos"
 log_file="$HOME/stream_history.log"
@@ -52,6 +57,7 @@ else
     echo "System: Använder standard (alla trådar)."
 fi
 
+# Skapa huvudmappen för videofiler
 mkdir -p "$base_save_dir"
 
 cleanup_and_exit() {
@@ -77,6 +83,7 @@ cleanup_and_exit() {
         echo "Filerna behålls."
     fi
 
+    # Hantera avbrutna .part-filer och rensa skräp under 100kb
     echo "Letar efter avbrutna inspelningar (.part-filer)..."
     find "$base_save_dir" -type f -name "*.mp4.part" -size -100k -delete
     
@@ -86,53 +93,44 @@ cleanup_and_exit() {
         echo "Fixade fil: $(basename "$part_file") -> $(basename "$new_file")"
     done
     echo "Filhanteringen är klar."
+
     exit 0
 }
 
 echo "Bevakning startad ($today). Logg sparas i: $log_file"
 
 while true; do
+    # NYTT: Skapar den nya filen baserad på scriptets namn om den saknas
     if [[ ! -f "$input_file" ]]; then
-        echo "Hittar inte listan med streamers. Skapar en ny automatisk fil på: $input_file"
-        echo "# Lägg till webbsite-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
+        echo "Hittar inte listan. Skapar en ny automatisk fil på: $input_file"
+        echo "# Lägg till Webbsite-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
         echo "# Rader som börjar med # hoppas över automatiskt" >> "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     elif [[ ! -s "$input_file" ]]; then
-        echo "Fel: Listan med streamers ($input_file) är helt tom (0 kb)."
-        echo "# Lägg till webbsite-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
+        echo "Fel: Listan ($input_file) är helt tom (0 kb)."
+        echo "# Lägg till Webbsite-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     fi
 
-    # Klassisk, stabil rad-för-rad-inläsning
     while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
-        
-        # 1. Ta bort kommentarer direkt från råa raden
         clean_line=$(echo "$raw_line" | sed 's/#.*//')
-        
-        # 2. Tvätta bort ALLA mellanslag, tabbar och Windows-radbrytningar (\r)
         item=$(echo "$clean_line" | tr -d '\r\n\t ')
         
-        # 3. Om raden blev tom efter tvätten (eller var en ren kommentar), hoppa över
         [[ -z "$item" ]] && continue
 
-        # 4. Ta bort eventuella snedstreck i början/slutet som blivit kvar
         item="${item#/}"
         item="${item%/}"
 
-        # 5. Robust URL-byggare
         if [[ "$item" == http://* || "$item" == https://* ]]; then
             url="$item"
         elif [[ "$item" == *twitch.tv* ]]; then
-            # Om raden innehåller twitch.tv men saknar https:// (t.ex. twitch.tv/streamer2)
             url="https://$item"
         else
-            # Om det bara är ett rent namn (t.ex. streamer1)
-            url="https://example.com/$item"
+            url="https://example.com"
         fi
 
-        # Skapa ett säkert namn för lock-filen
         safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
         lock_file="$temp_dir/${today}-${safe_name}.lock"
         
@@ -141,18 +139,13 @@ while true; do
             continue
         fi
 
-        # Skapa mappnamn baserat på sista delen av URL:en
-        actor_name="${url##*/}"
-        current_actor_dir="$base_save_dir/$actor_name"
-        mkdir -p "$current_actor_dir"
-
-        echo $item
         echo "--- Kollar: $url ---"
         touch "$lock_file"
         start_time=$(date "+%Y-%m-%d %H:%M:%S")
         
-        # Kör yt-dlp på en enda rad
-        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "${ffmpeg_args[@]}" -o "$current_actor_dir/%(title)s - %(upload_date)s.%(ext)s" "$url"
+        # NYTT: yt-dlp skapar nu undermappen själv baserat på profilnamn (uploader)
+        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "${ffmpeg_args[@]}" \
+            -o "$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s" "$url"
         
         status=$?
         rm -f "$lock_file"
