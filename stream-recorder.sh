@@ -1,6 +1,4 @@
 #!/bin/bash
-# Vänta på nätverk vid autostart så systemet hinner ansluta
-sleep 10
 
 # --- KONFIGURATION ---
 script_dir=$(dirname "$(readlink -f "$0")")
@@ -12,6 +10,7 @@ base_save_dir="$HOME/stream_videos"
 log_file="$HOME/stream_history.log"
 config_file="$HOME/.ffmpeg_threads_config"
 size_config_file="$HOME/.file_size_config"
+sleep_config_file="$HOME/.sleep_config"
 temp_dir="/tmp/stream_locks"
 today=$(date +%Y%m%d)
 # ---------------------
@@ -19,7 +18,37 @@ today=$(date +%Y%m%d)
 # Skapa temp-mappen om den inte existerar
 mkdir -p "$temp_dir"
 
-# 1. Kolla efter gamla lock-filer som inte tillhör dagens datum
+# 1. Hantera inställning för slumpmässig paus
+if [[ ! -f "$sleep_config_file" ]]; then
+    echo "--- Inställning för slumpmässig paus ---"
+    read -p "Ange maximal väntetid i sekunder när en kanal är offline (eller tryck ENTER för 15): " sleep_choice
+    if [[ -z "$sleep_choice" ]]; then
+        sleep_choice="15"
+    fi
+    sleep_choice=$(echo "$sleep_choice" | tr -dc '0-9')
+    echo "$sleep_choice" > "$sleep_config_file"
+    echo "Inställning sparad: Pausar mellan 2 och ${sleep_choice} sekunder."
+fi
+max_sleep=$(cat "$sleep_config_file" 2>/dev/null)
+
+# 2. Slumpmässig startfördröjning
+min_sleep=5
+if [ "$max_sleep" -lt "$min_sleep" ]; then
+    max_sleep=$min_sleep
+fi
+
+start_interval=$(( max_sleep - min_sleep + 1 ))
+random_start_sleep=$(( ( RANDOM % start_interval ) + min_sleep ))
+
+echo "Systemet startar. Väntar i en slumpmässig fördröjning på $random_start_sleep sekunder (mellan $min_sleep och $max_sleep)..."
+echo "-> Tryck på en tangent för att hoppa över väntetiden och starta direkt."
+
+read -t "$random_start_sleep" -n 1 key
+if [[ -n "$key" ]]; then
+    echo -e "\nHoppar över fördröjningen och startar direkt..."
+fi
+
+# 3. Kolla efter gamla lock-filer som inte tillhör dagens datum
 old_locks=$(find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" 2>/dev/null)
 
 if [[ -n "$old_locks" ]]; then
@@ -31,13 +60,13 @@ if [[ -n "$old_locks" ]]; then
     fi
 fi
 
-# 2. Kontrollera att ffmpeg finns installerat i systemet
+# 4. Kontrollera att ffmpeg finns installerat i systemet
 if ! command -v ffmpeg &> /dev/null; then
     echo "FEL: ffmpeg saknas. Installera med: sudo apt update && sudo apt install ffmpeg"
     exit 1
 fi
 
-# 3. Hantera inställning för ffmpeg-trådar
+# 5. Hantera inställning för ffmpeg-trådar
 if [[ ! -f "$config_file" ]]; then
     read -p "Begränsa ffmpeg till 1 tråd? (Rekommenderas för Raspberry Pi) (j/n): " thread_choice
     if [[ "$thread_choice" =~ ^(j|J|ja|JA)$ ]]; then
@@ -55,7 +84,7 @@ else
     echo "System: Använder standard (alla trådar)."
 fi
 
-# 4. Hantera inställning för rensning av skräpfiler
+# 6. Hantera inställning för rensning av skräpfiler
 if [[ ! -f "$size_config_file" ]]; then
     echo "--- Inställning för rensning av skräpfiler ---"
     read -p "Hur små avbrutna filer ska raderas? Ange i kb (t.ex. 500), eller tryck bara ENTER för 1000kb: " size_choice
@@ -66,9 +95,13 @@ if [[ ! -f "$size_config_file" ]]; then
     echo "$size_choice" > "$size_config_file"
     echo "Inställning sparad: Raderar avbrutna filer mindre än ${size_choice}kb."
 fi
-# Rent numeriskt värde för beräkningar
 min_size_num=$(cat "$size_config_file" 2>/dev/null)
 min_file_size="${min_size_num}k"
+
+sleep_interval=$(( max_sleep - 2 + 1 ))
+if [ $sleep_interval -le 0 ]; then
+    sleep_interval=1
+fi
 
 # Skapa huvudmappen för videofiler
 mkdir -p "$base_save_dir"
@@ -86,7 +119,7 @@ cleanup_and_exit() {
             echo "Alla mappar och filer har raderats."
             exit 0
         else
-            echo "Radering avbruten. Rensar tomma mappar men behåller dina inspelningar..."
+            echo "Rering avbruten. Rensar tomma mappar men behåller dina inspelningar..."
             find "$base_save_dir" -mindepth 1 -type d -empty -delete
             echo "Klara inspelningar sparades. Tomma mappar togs bort."
         fi
@@ -96,45 +129,32 @@ cleanup_and_exit() {
         echo "Filerna behålls."
     fi
 
-    # 1. Hantera avbrutna .part-filer och rensa skräp baserat på lägsta gräns (t.ex. under 1000kb)
     echo "Letar efter avbrutna inspelningar (.part-filer)..."
     find "$base_save_dir" -type f -name "*.mp4.part" -size -"$min_file_size" -delete
     
-    # 2. Döp om resterande .part-filer till vanliga .mp4-filer med "-avbruten" i namnet
     find "$base_save_dir" -type f -name "*.mp4.part" | while read -r part_file; do
         new_file="${part_file%.mp4.part}-avbruten.mp4"
         mv "$part_file" "$new_file"
         echo "Fixade fil: $(basename "$part_file") -> $(basename "$new_file")"
     done
 
-    # 3. NYTT: Sortera färdiga filer som hamnar i intervallet [min_file_size] till 100 000kb
     echo "Sorterar mindre videofiler (mellan ${min_size_num}kb och 100000kb)..."
-    
-    # Vi letar efter .mp4-filer som uppfyller storlekskraven
-    # Obs: Flyttar ej filer som redan ligger i en "-mindre-filer"-mapp
     find "$base_save_dir" -type f -name "*.mp4" -size +"${min_size_num}k" -size -100000k | while read -r video_file; do
-        
-        # Hämta namnet på mappen som filen ligger i just nu
         current_dir=$(dirname "$video_file")
         dir_name=$(basename "$current_dir")
         
-        # Hoppa över om filen redan ligger i en sorterad mindre-filer-mapp
         if [[ "$dir_name" == *"-mindre-filer" ]]; then
             continue
         fi
         
-        # Bygg den nya mappen: t.ex. .../stream_videos/AirlineVideosLive+-mindre-filer
         new_dir="$base_save_dir/${dir_name}-mindre-filer"
         mkdir -p "$new_dir"
         
-        # Flytta filen
         mv "$video_file" "$new_dir/"
         echo "Flyttade liten fil: $(basename "$video_file") -> ${dir_name}-mindre-filer/"
     done
 
-    # 4. Sista städning: Ta bort eventuella mappar som blev helt tomma efter flytten
     find "$base_save_dir" -mindepth 1 -type d -empty -delete
-
     echo "Filhanteringen är klar."
     exit 0
 }
@@ -144,32 +164,52 @@ echo "Bevakning startad ($today). Logg sparas i: $log_file"
 while true; do
     if [[ ! -f "$input_file" ]]; then
         echo "Hittar inte listan. Skapar en ny automatisk fil på: $input_file"
-        echo "# Lägg till Webbsajt-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
+        echo "# Lägg till Webbsida-namn, hela URL-adresser eller delay(sekunder) här" > "$input_file"
         echo "# Rader som börjar med # hoppas över automatiskt" >> "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     elif [[ ! -s "$input_file" ]]; then
         echo "Fel: Listan ($input_file) är helt tom (0 kb)."
-        echo "# Lägg till Webbsajt-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
+        echo "# Lägg till Webbsida-namn, hela URL-adresser eller delay(sekunder) här" > "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     fi
 
-    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+    # KORRIGERING: Vi läser filen via kanal 3 (u3) istället för standard stdin (<)
+    while IFS= read -r raw_line <&3 || [[ -n "$raw_line" ]]; do
         clean_line=$(echo "$raw_line" | sed 's/#.*//')
         item=$(echo "$clean_line" | tr -d '\r\n\t ')
         
         [[ -z "$item" ]] && continue
 
+        # Kolla efter delay(sekunder) - Fungerar nu med både stort och litet D
+        if [[ "$item" =~ ^[dD]elay\(([0-9]+)\)$ ]]; then
+            custom_delay="${BASH_REMATCH[1]}"
+            echo "--- Manuellt kommando: Pausar i $custom_delay sekunder ---"
+            echo "-> Tryck 'q' för att hoppa över pausen."
+            
+            # Vi tvingar read att lyssna på tangentbordet (< /dev/tty)
+            read -t "$custom_delay" -n 1 delay_key < /dev/tty
+            if [[ "$delay_key" == "q" ]]; then
+                read -t 2 -n 1 -p "Vill du avsluta hela skriptet? (q för ja, vänta för att hoppa över): " confirm_key < /dev/tty
+                if [[ "$confirm_key" == "q" ]]; then
+                    cleanup_and_exit
+                fi
+                echo -e "\nHoppar över denna paus..."
+            fi
+            continue
+        fi
+
         item="${item#/}"
         item="${item%/}"
 
-        if [[ "$item" == http://* || "$item" == https://* ]]; then
+        # URL-byggaren som du korrigerade med rätt dollartecken och snedstreck
+        if [[ "$item" == https://* || "$item" == http://* ]]; then
             url="$item"
         elif [[ "$item" == *twitch.tv* ]]; then
-            url="https://$item"
+            url="https://${item}"
         else
-            url="https://example.com"
+            url="https://example.com/${item}"
         fi
 
         safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
@@ -184,9 +224,9 @@ while true; do
         touch "$lock_file"
         start_time=$(date "+%Y-%m-%d %H:%M:%S")
         
-        # yt-dlp skapar undermappen själv baserat på profilnamn (uploader)
+        # KORRIGERING: Vi tvingar yt-dlp att stänga sin stdin (</dev/null) så den inte stjäl bokstäver
         yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "${ffmpeg_args[@]}" \
-            -o "$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s" "$url"
+            -o "$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s" "$url" </dev/null
         
         status=$?
         rm -f "$lock_file"
@@ -201,14 +241,16 @@ while true; do
             fi
             echo "$log_entry" >> "$log_file"
         else
-            wait_time=$(( ( RANDOM % 14 ) + 2 ))
+            wait_time=$(( ( RANDOM % sleep_interval ) + 2 ))
             echo "Offline/Klar: Väntar $wait_time sekunder..."
             
-            read -t "$wait_time" -n 1 key
+            # Vi tvingar offline-pausen att lyssna på tangentbordet (< /dev/tty)
+            read -t "$wait_time" -n 1 key < /dev/tty
             [[ $key == "q" ]] && cleanup_and_exit
         fi
-    done < "$input_file"
+    # Vi öppnar filen på kanal 3 här (3<)
+    done 3< "$input_file"
 
-    read -t 5 -n 1 key
+    read -t 5 -n 1 key < /dev/tty
     [[ $key == "q" ]] && cleanup_and_exit
 done
