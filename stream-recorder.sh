@@ -3,14 +3,13 @@
 sleep 10
 
 # --- KONFIGURATION ---
-# Tar reda på mappen där scriptet ligger och letar efter stream_recorder.txt där
 script_dir=$(dirname "$(readlink -f "$0")")
 input_file="$script_dir/stream_recorder.txt"
 
-base_save_dir="$HOME/twitch_videos"
+base_save_dir="$HOME/stream_videos"
 log_file="$HOME/stream_history.log"
 config_file="$HOME/.ffmpeg_threads_config"
-temp_dir="/tmp/twitch_locks"
+temp_dir="/tmp/stream_locks"
 today=$(date +%Y%m%d)
 # ---------------------
 
@@ -35,7 +34,7 @@ if ! command -v ffmpeg &> /dev/null; then
     exit 1
 fi
 
-# 3. Hantera inställning för ffmpeg-trådar (Skrivs som ren text till filen)
+# 3. Hantera inställning för ffmpeg-trådar
 if [[ ! -f "$config_file" ]]; then
     read -p "Begränsa ffmpeg till 1 tråd? (Rekommenderas för Raspberry Pi) (j/n): " thread_choice
     if [[ "$thread_choice" =~ ^(j|J|ja|JA)$ ]]; then
@@ -45,7 +44,6 @@ if [[ ! -f "$config_file" ]]; then
     fi
 fi
 
-# Läs filen och bygg upp rätt argument i en Bash-array
 if [[ $(cat "$config_file" 2>/dev/null) == "1" ]]; then
     ffmpeg_args=(--downloader-args "ffmpeg:-threads 1")
     echo "System: Begränsar till 1 CPU-tråd."
@@ -54,10 +52,8 @@ else
     echo "System: Använder standard (alla trådar)."
 fi
 
-# Skapa huvudmappen för videofiler
 mkdir -p "$base_save_dir"
 
-# Funktion som körs när du trycker 'q' för att städa upp och avsluta
 cleanup_and_exit() {
     echo -e "\n"
     rm -f "$temp_dir/${today}-"*.lock
@@ -81,7 +77,6 @@ cleanup_and_exit() {
         echo "Filerna behålls."
     fi
 
-    # Hantera avbrutna .part-filer och rensa skräp under 100kb
     echo "Letar efter avbrutna inspelningar (.part-filer)..."
     find "$base_save_dir" -type f -name "*.mp4.part" -size -100k -delete
     
@@ -91,88 +86,95 @@ cleanup_and_exit() {
         echo "Fixade fil: $(basename "$part_file") -> $(basename "$new_file")"
     done
     echo "Filhanteringen är klar."
-
     exit 0
 }
 
 echo "Bevakning startad ($today). Logg sparas i: $log_file"
 
-# Huvudloop som körs för evigt tills 'q' trycks ned
 while true; do
-    # 1. Om filen saknas helt, skapa en ny med instruktioner
     if [[ ! -f "$input_file" ]]; then
         echo "Hittar inte listan med streamers. Skapar en ny automatisk fil på: $input_file"
-        
-        echo "# Lägg till dina Twitch-streamers här (ett namn per rad)" > "$input_file"
-        echo "# Ta bort raden nedan och ersätt med valfria namn:" >> "$input_file"
+        echo "# Lägg till webbsite-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
+        echo "# Rader som börjar med # hoppas över automatiskt" >> "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
-        
-        echo "En ny 'actors.txt' har skapats. Öppna den och lägg till dina streamers. Avslutar..."
         exit 1
-
-    # 2. Om filen finns men råkar vara tom (0 kb), fyll på den igen
     elif [[ ! -s "$input_file" ]]; then
         echo "Fel: Listan med streamers ($input_file) är helt tom (0 kb)."
-        
-        echo "# Lägg till dina Twitch-streamers här (ett namn per rad)" > "$input_file"
+        echo "# Lägg till webbsite-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
-        
-        echo "Återställde instruktioner i 'actors.txt'. Öppna filen och lägg till namn. Avslutar..."
         exit 1
     fi
 
-    # Läs in textfilen med hänsyn till TAB, LF och CRLF
-    while IFS=$'\t\n\r' read -d '' -r -a actor_list || [ ${#actor_list[@]} -gt 0 ]; do
+    # Klassisk, stabil rad-för-rad-inläsning
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
         
-        for actor in "${actor_list[@]}"; do
-            # Tvätta namnet från dolda tecken, snedstreck och mellanslag
-            actor=$(echo "$actor" | tr -d '\r\n\t /')
-            
-            [[ -z "$actor" ]] && continue
+        # 1. Ta bort kommentarer direkt från råa raden
+        clean_line=$(echo "$raw_line" | sed 's/#.*//')
+        
+        # 2. Tvätta bort ALLA mellanslag, tabbar och Windows-radbrytningar (\r)
+        item=$(echo "$clean_line" | tr -d '\r\n\t ')
+        
+        # 3. Om raden blev tom efter tvätten (eller var en ren kommentar), hoppa över
+        [[ -z "$item" ]] && continue
 
-            # Definiera unik lock-fil baserat på datum och streamernamn
-            lock_file="$temp_dir/${today}-${actor}.lock"
+        # 4. Ta bort eventuella snedstreck i början/slutet som blivit kvar
+        item="${item#/}"
+        item="${item%/}"
+
+        # 5. Robust URL-byggare
+        if [[ "$item" == http://* || "$item" == https://* ]]; then
+            url="$item"
+        elif [[ "$item" == *twitch.tv* ]]; then
+            # Om raden innehåller twitch.tv men saknar https:// (t.ex. twitch.tv/streamer2)
+            url="https://$item"
+        else
+            # Om det bara är ett rent namn (t.ex. streamer1)
+            url="https://example.com/$item"
+        fi
+
+        # Skapa ett säkert namn för lock-filen
+        safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
+        lock_file="$temp_dir/${today}-${safe_name}.lock"
+        
+        if [[ -f "$lock_file" ]]; then
+            echo "--- $url körs redan idag i ett annat fönster. Hoppar över. ---"
+            continue
+        fi
+
+        # Skapa mappnamn baserat på sista delen av URL:en
+        actor_name="${url##*/}"
+        current_actor_dir="$base_save_dir/$actor_name"
+        mkdir -p "$current_actor_dir"
+
+        echo $item
+        echo "--- Kollar: $url ---"
+        touch "$lock_file"
+        start_time=$(date "+%Y-%m-%d %H:%M:%S")
+        
+        # Kör yt-dlp på en enda rad
+        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "${ffmpeg_args[@]}" -o "$current_actor_dir/%(title)s - %(upload_date)s.%(ext)s" "$url"
+        
+        status=$?
+        rm -f "$lock_file"
+
+        if [ $status -eq 0 ]; then
+            end_time=$(date "+%Y-%m-%d %H:%M:%S")
+            log_entry="[$start_time till $end_time] $url ONLINE"
             
-            if [[ -f "$lock_file" ]]; then
-                echo "--- $actor körs redan idag i ett annat fönster. Hoppar över. ---"
-                continue
+            if [[ "$url" == *"twitch.tv"* ]]; then
+                title=$(yt-dlp --get-title --no-check-certificate "$url" 2>/dev/null)
+                log_entry="$log_entry - Titel: $title"
             fi
-
-            # Korrekt URL utan dolda eller dubbla snedstreck
-            url="https://twitch.tv/${actor}"
-            current_actor_dir="$base_save_dir/$actor"
-            mkdir -p "$current_actor_dir"
-
-            echo "--- Kollar: $actor ---"
-            touch "$lock_file"
-            start_time=$(date "+%Y-%m-%d %H:%M:%S")
+            echo "$log_entry" >> "$log_file"
+        else
+            wait_time=$(( ( RANDOM % 14 ) + 2 ))
+            echo "Offline/Klar: Väntar $wait_time sekunder..."
             
-            # Kör yt-dlp på en enda rad med array-parametern intakt
-            yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "${ffmpeg_args[@]}" -o "$current_actor_dir/%(title)s - %(upload_date)s.%(ext)s" "$url"
-            
-            status=$?
-            rm -f "$lock_file"
-
-            if [ $status -eq 0 ]; then
-                end_time=$(date "+%Y-%m-%d %H:%M:%S")
-                log_entry="[$start_time till $end_time] $actor ONLINE"
-                
-                if [[ "$url" == *"twitch.tv"* ]]; then
-                    title=$(yt-dlp --get-title --no-check-certificate "$url" 2>/dev/null)
-                    log_entry="$log_entry - Titel: $title"
-                fi
-                echo "$log_entry" >> "$log_file"
-            else
-                wait_time=$(( ( RANDOM % 14 ) + 2 ))
-                echo "Offline: Väntar $wait_time sekunder..."
-                
-                read -t "$wait_time" -n 1 key
-                [[ $key == "q" ]] && cleanup_and_exit
-            fi
-        done
+            read -t "$wait_time" -n 1 key
+            [[ $key == "q" ]] && cleanup_and_exit
+        fi
     done < "$input_file"
 
-    # Kort paus efter att hela listan har gåtts igenom
     read -t 5 -n 1 key
     [[ $key == "q" ]] && cleanup_and_exit
 done
