@@ -4,26 +4,27 @@
 
 base_save_dir=$HOME/stream_videos
 input_file=stream_recorder.txt
-
+log_file=$base_save_dir/stream_history.log
 # ---------------------
 
-# Skapa mappen om den inte redan finns
+# 1. Kontrollera om ffmpeg finns installerat
+if ! command -v ffmpeg &> /dev/null; then
+    echo "FEL: ffmpeg hittades inte. Installera det med: sudo apt update && sudo apt install ffmpeg"
+    exit 1
+else
+    echo "Systemkontroll: ffmpeg är installerat."
+fi
+
 mkdir -p $base_save_dir
 
-# Funktion för att städa upp vid avslut
 cleanup_and_exit() {
     echo -e "\n"
-    read -p "Vill du behålla de nedladdade filerna? (j/n): " choice
-    case "$choice" in 
+    read -p "Vill du behålla de nedladdade filerna i mappen? (j/n): " choice
+    case $choice in 
         n|N|nej|NEJ)
-            echo "Rensar mappar och filer i $base_save_dir..."
-            # Gå igenom undermapparna och radera dem
-            for dir in $base_save_dir/*/; do
-                if [ -d $dir ]; then
-                    rm -rf $dir
-                fi
-            done
-            echo "Klart. Alla undermappar är borttagna."
+            echo "Rensar undermappar i $base_save_dir..."
+            find $base_save_dir/$actor -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+            echo "Rensning klar."
             ;;
         *)
             echo "Filerna behålls."
@@ -32,7 +33,7 @@ cleanup_and_exit() {
     exit 0
 }
 
-echo "Bevakar streamers. Tryck 'q' mellan kollarna för att avsluta."
+echo "Bevakning startad. Loggar till: $log_file"
 
 while true; do
     if [[ ! -f $input_file ]]; then
@@ -43,32 +44,33 @@ while true; do
     while IFS= read -r actor || [[ -n $actor ]]; do
         [[ -z $actor ]] && continue
 
-        # Skapa unik undermapp för streamern
         current_actor_dir=$base_save_dir/$actor
         mkdir -p $current_actor_dir
 
         echo "--- Kollar: $actor ---"
         
-        # -o anger nu undermappen specifikt för denna actor
-
-        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate  -o $current_actor_dir/$actor https://example.com/${actor} 
+        # Logga att vi kollar streamern
+        start_time=$(date "+%Y-%m-%d %H:%M:%S")
+        
+        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate  -o $current_actor_dir/"%(title)s - %(upload_date)s.%(ext)s" https://example.com/${actor}
         
         status=$?
 
-        if [ $status -ne 0 ]; then
+        if [ $status -eq 0 ]; then
+            # Om status är 0 betyder det att yt-dlp har kört (laddat ner en stream)
+            end_time=$(date "+%Y-%m-%d %H:%M:%S")
+            echo "[$start_time till $end_time] $actor var ONLINE" >> "$log_file"
+            echo "Loggat: $actor var online."
+        else
+            # Om offline, slumpmässig paus
             wait_time=$(( ( RANDOM % 14 ) + 2 ))
             echo "Offline: Väntar $wait_time sekunder..."
             read -t $wait_time -n 1 key
-            [[ $key == "q" ]] && cleanup_and_exit
-        else
-            # Ge en liten chans att trycka 'q' även efter lyckad nerladdning
-            read -t 1 -n 1 key
             [[ $key == "q" ]] && cleanup_and_exit
         fi
 
     done < $input_file
 
-    echo "Listan klar. Startar om..."
     read -t 5 -n 1 key
     [[ $key == "q" ]] && cleanup_and_exit
 done
