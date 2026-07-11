@@ -82,7 +82,8 @@ while true; do
             continue
         fi
 
-        url="https://twitch.tv{actor}"
+        url="https://example.com{actor}"
+        url2="https://example.com/${actor}"
         current_actor_dir=$base_save_dir/$actor
         mkdir -p $current_actor_dir
 
@@ -91,7 +92,8 @@ while true; do
         start_time=$(date "+%Y-%m-%d %H:%M:%S")
         
         # Kör nedladdning
-        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate  -o $current_actor_dir/"%(title)s - %(upload_date)s.%(ext)s" "$url2"
+        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate \
+            -o "$current_actor_dir/%(title)s - %(upload_date)s.%(ext)s" "$url2"
 
         status=$?
         rm -f "$lock_file"
@@ -110,21 +112,6 @@ while true; do
             read -t "$wait_time" -n 1 key
             [[ $key == "q" ]] && cleanup_and_exit
         fi
-
-            # log_entry="[$start_time till $end_time] $actor var ONLINE"
-            # if [[ $url == *"twitch.tv"* ]]; then
-            #     # Hämtar titeln snabbt med --get-title
-            #     title=$(yt-dlp --get-title --no-check-certificate $url 2>/dev/null)
-            #     log_entry=$log_entry - Titel: $title
-            # fi
-            
-        #     echo "$log_entry" >> "$log_file"
-        # else
-        #     wait_time=$(( ( RANDOM % 14 ) + 2 ))
-        #     echo "Offline: Väntar $wait_time sekunder..."
-        #     read -t "$wait_time" -n 1 key
-        #     [[ $key == "q" ]] && cleanup_and_exit
-        # fi
 
    done < "$input_file"
 
