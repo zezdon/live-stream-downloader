@@ -1,59 +1,75 @@
 #!/bin/bash
-# Vänta på nätverk vid autostart
+# Vänta på nätverk vid autostart så systemet hinner ansluta
 #sleep 10
 
 # --- KONFIGURATION ---
-
-base_save_dir=$HOME/stream_videos
-input_file=stream_recorder.txt
-log_file=$base_save_dir/stream_history.log
+input_file="$HOME/stream_recorder.txt"
+base_save_dir="$HOME/stream_videos"
+log_file="$HOME/stream_history.log"
 config_file="$HOME/.ffmpeg_threads_config"
 temp_dir="/tmp/stream_locks"
 today=$(date +%Y%m%d)
 # ---------------------
 
+# Skapa temp-mappen om den inte existerar
 mkdir -p "$temp_dir"
 
-# 1. Kolla efter gamla lock-filer (inte dagens datum)
-old_locks=$(find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock")
+# 1. Kolla efter gamla lock-filer som inte tillhör dagens datum
+old_locks=$(find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" 2>/dev/null)
 
 if [[ -n "$old_locks" ]]; then
     echo "Hittade gamla lock-filer från tidigare dagar."
     read -p "Vill du rensa gamla låsfiler innan start? (j/n): " purge_choice
     if [[ "$purge_choice" =~ ^(j|J|ja|JA)$ ]]; then
-        find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" -delete
+        find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" -delete 2>/dev/null
         echo "Gamla låsfiler raderade."
     fi
 fi
 
-# Kontrollera ffmpeg
+# 2. Kontrollera att ffmpeg finns installerat i systemet
 if ! command -v ffmpeg &> /dev/null; then
-    echo "FEL: ffmpeg hittades inte. Installera med: sudo apt update && sudo apt install ffmpeg"
+    echo "FEL: ffmpeg saknas. Installera med: sudo apt update && sudo apt install ffmpeg"
     exit 1
 fi
 
-# 3. Hantera ffmpeg-trådar
+# 3. Hantera inställning för ffmpeg-trådar (Skrivs som ren text till filen)
 if [[ ! -f "$config_file" ]]; then
-    read -p "Begränsa ffmpeg till 1 tråd? (j/n): " thread_choice
-    [[ "$thread_choice" =~ ^(j|J|ja|JA)$ ]] && echo "--downloader-args \"ffmpeg:-threads 1\"" > "$config_file" || echo "" > "$config_file"
+    read -p "Begränsa ffmpeg till 1 tråd? (Rekommenderas för Raspberry Pi) (j/n): " thread_choice
+    if [[ "$thread_choice" =~ ^(j|J|ja|JA)$ ]]; then
+        echo "1" > "$config_file"
+    else
+        echo "0" > "$config_file"
+    fi
 fi
-ffmpeg_args=$(cat "$config_file")
 
+# Läs filen och bygg upp rätt argument i en Bash-array
+if [[ $(cat "$config_file") == "1" ]]; then
+    ffmpeg_args=(--downloader-args "ffmpeg:-threads 1")
+    echo "System: Begränsar till 1 CPU-tråd."
+else
+    ffmpeg_args=()
+    echo "System: Använder standard (alla trådar)."
+fi
+
+# Läs in inställningen från filen
+ffmpeg_args=$(cat $config_file)
+
+# Skapa huvudmappen för videofiler
 mkdir -p "$base_save_dir"
 
+# Funktion som körs när du trycker 'q' för att städa upp och avsluta
 cleanup_and_exit() {
     echo -e "\n"
-    # Ta bara bort lock-filer som skapats av just denna körning för att inte störa andra fönster
-    rm -f "$temp_dir/${today}-"*.lock    
-    echo -e "\n"
+    # Ta bara bort lock-filer som skapats av just denna dag/körning
+    rm -f "$temp_dir/${today}-"*.lock
+    
     read -p "Vill du behålla de nedladdade filerna? (j/n): " choice
-    if [[ $choice =~ ^(n|N|nej|NEJ)$ ]]; then
-        echo -e "\a" # Ett litet varningsljud
-        read -p "ÄR DU HELT SÄKER? Detta raderar ALLT i undermapparna! (j/n): " confirm
-        if [[ $confirm =~ ^(j|J|ja|JA)$ ]]; then
-            echo "Rensar undermappar i $base_save_dir..."
-            find $base_save_dir/$actor -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
-            echo "Allt raderat."
+    if [[ "$choice" =~ ^(n|N|nej|NEJ)$ ]]; then
+        echo -e "\a" # Varningsljud
+        read -p "ÄR DU HELT SÄKER? Detta raderar ALLA undermappar permanent! (j/n): " confirm
+        if [[ "$confirm" =~ ^(j|J|ja|JA)$ ]]; then
+            find "$base_save_dir" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+            echo "Mappar och filer har raderats."
         else
             echo "Radering avbruten. Filerna behålls."
         fi
@@ -63,58 +79,76 @@ cleanup_and_exit() {
     exit 0
 }
 
-echo "Bevakning startad. Loggar till: $log_file"
+echo "Bevakning startad ($today). Logg sparas i: $log_file"
 
+# Huvudloop som körs för evigt tills 'q' trycks ned
 while true; do
-    if [[ ! -f $input_file ]]; then
-        echo "Fel: Hittar inte $input_file"
+    if [[ ! -f "$input_file" ]]; then
+        echo "Fel: Hittar inte listan med streamers på: $input_file"
         exit 1
     fi
 
-    while IFS= read -r actor || [[ -n $actor ]]; do
-        [[ -z $actor ]] && continue
+    # Läs textfilen rad för rad
+    while IFS= read -r actor || [[ -n "$actor" ]]; do
+        [[ -z "$actor" ]] && continue
 
-        # Lock-fil med datum: t.ex. /tmp/stream_locks/20231027-streamer1.lock
+        # Definiera unik lock-fil baserat på datum och streamernamn
         lock_file="$temp_dir/${today}-${actor}.lock"
         
+        # Om filen redan finns körs denna streamer i ett annat terminalfönster
         if [[ -f "$lock_file" ]]; then
-            echo "--- $actor körs redan idag i ett annat fönster ---"
+            echo "--- $actor körs redan idag i ett annat fönster. Hoppar över. ---"
             continue
         fi
 
-        url="https://example.com{actor}"
-        url2="https://example.com/${actor}"
-        current_actor_dir=$base_save_dir/$actor
-        mkdir -p $current_actor_dir
+        url="https://example.com/${actor}"
+        current_actor_dir="$base_save_dir/$actor"
+        mkdir -p "$current_actor_dir"
 
         echo "--- Kollar: $actor ---"
-        touch "$lock_file"        
+        
+        # Skapa låsfilen precis innan yt-dlp startar
+        touch "$lock_file"
         start_time=$(date "+%Y-%m-%d %H:%M:%S")
         
-        # Kör nedladdning
-        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate \
-            -o "$current_actor_dir/%(title)s - %(upload_date)s.%(ext)s" "$url2"
+        # Starta yt-dlp med angivna argument och spara i unik undermapp
+        # Kör yt-dlp med array-variabeln i loopen
+        # yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate \
+        #    $ffmpeg_args \
+        #    -o "$current_actor_dir/%(title)s - %(upload_date)s.%(ext)s" \
+        #    "$url"
+
+        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "${ffmpeg_args[@]}" -o "$current_actor_dir/%(title)s - %(upload_date)s.%(ext)s" "$url"
 
         status=$?
+        
+        # Ta omedelbart bort låsfilen när yt-dlp har kört klart eller misslyckats
         rm -f "$lock_file"
 
+        # Om status är 0 lyckades yt-dlp (streamen var online och har laddats ner)
         if [ $status -eq 0 ]; then
-            # Om status är 0 betyder det att yt-dlp har kört (laddat ner en stream)
             end_time=$(date "+%Y-%m-%d %H:%M:%S")
+            log_entry="[$start_time till $end_time] $actor ONLINE"
             
-            # Kolla om det är Twitch och hämta titel
-           log_entry="[$start_time till $end_time] $actor ONLINE"
-            [[ "$url" == *"twitch.tv"* ]] && log_entry="$log_entry - Titel: $(yt-dlp --get-title "$url" 2>/dev/null)"
+            # Hämta titeln via yt-dlp om källan är Twitch
+            if [[ "$url" == *"twitch.tv"* ]]; then
+                title=$(yt-dlp --get-title --no-check-certificate "$url" 2>/dev/null)
+                log_entry="$log_entry - Titel: $title"
+            fi
+            
             echo "$log_entry" >> "$log_file"
         else
+            # Om streamern var offline: generera slumpmässig paus mellan 2 och 15 sekunder
             wait_time=$(( ( RANDOM % 14 ) + 2 ))
-            echo "Offline: Väntar $wait_time sek..."
+            echo "Offline: Väntar $wait_time sekunder..."
+            
+            # Vänta, men avbryt om användaren trycker 'q'
             read -t "$wait_time" -n 1 key
             [[ $key == "q" ]] && cleanup_and_exit
         fi
+    done < "$input_file"
 
-   done < "$input_file"
-
+    # Kort paus efter att hela listan har gåtts igenom en gång
     read -t 5 -n 1 key
     [[ $key == "q" ]] && cleanup_and_exit
 done
