@@ -3,10 +3,7 @@
 sleep 10
 
 # --- KONFIGURATION ---
-# Tar reda på mappen där scriptet ligger
 script_dir=$(dirname "$(readlink -f "$0")")
-
-# NYTT: Sätter namnet på textfilen till samma som scriptet, fast med .txt
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
 input_file="$script_dir/${script_base}.txt"
@@ -14,6 +11,7 @@ input_file="$script_dir/${script_base}.txt"
 base_save_dir="$HOME/stream_videos"
 log_file="$HOME/stream_history.log"
 config_file="$HOME/.ffmpeg_threads_config"
+size_config_file="$HOME/.file_size_config"
 temp_dir="/tmp/stream_locks"
 today=$(date +%Y%m%d)
 # ---------------------
@@ -57,6 +55,21 @@ else
     echo "System: Använder standard (alla trådar)."
 fi
 
+# 4. Hantera inställning för rensning av skräpfiler
+if [[ ! -f "$size_config_file" ]]; then
+    echo "--- Inställning för rensning av skräpfiler ---"
+    read -p "Hur små avbrutna filer ska raderas? Ange i kb (t.ex. 500), eller tryck bara ENTER för 1000kb: " size_choice
+    if [[ -z "$size_choice" ]]; then
+        size_choice="1000"
+    fi
+    size_choice=$(echo "$size_choice" | tr -dc '0-9')
+    echo "$size_choice" > "$size_config_file"
+    echo "Inställning sparad: Raderar avbrutna filer mindre än ${size_choice}kb."
+fi
+# Rent numeriskt värde för beräkningar
+min_size_num=$(cat "$size_config_file" 2>/dev/null)
+min_file_size="${min_size_num}k"
+
 # Skapa huvudmappen för videofiler
 mkdir -p "$base_save_dir"
 
@@ -83,33 +96,61 @@ cleanup_and_exit() {
         echo "Filerna behålls."
     fi
 
-    # Hantera avbrutna .part-filer och rensa skräp under 100kb
+    # 1. Hantera avbrutna .part-filer och rensa skräp baserat på lägsta gräns (t.ex. under 1000kb)
     echo "Letar efter avbrutna inspelningar (.part-filer)..."
-    find "$base_save_dir" -type f -name "*.mp4.part" -size -100k -delete
+    find "$base_save_dir" -type f -name "*.mp4.part" -size -"$min_file_size" -delete
     
+    # 2. Döp om resterande .part-filer till vanliga .mp4-filer med "-avbruten" i namnet
     find "$base_save_dir" -type f -name "*.mp4.part" | while read -r part_file; do
         new_file="${part_file%.mp4.part}-avbruten.mp4"
         mv "$part_file" "$new_file"
         echo "Fixade fil: $(basename "$part_file") -> $(basename "$new_file")"
     done
-    echo "Filhanteringen är klar."
 
+    # 3. NYTT: Sortera färdiga filer som hamnar i intervallet [min_file_size] till 100 000kb
+    echo "Sorterar mindre videofiler (mellan ${min_size_num}kb och 100000kb)..."
+    
+    # Vi letar efter .mp4-filer som uppfyller storlekskraven
+    # Obs: Flyttar ej filer som redan ligger i en "-mindre-filer"-mapp
+    find "$base_save_dir" -type f -name "*.mp4" -size +"${min_size_num}k" -size -100000k | while read -r video_file; do
+        
+        # Hämta namnet på mappen som filen ligger i just nu
+        current_dir=$(dirname "$video_file")
+        dir_name=$(basename "$current_dir")
+        
+        # Hoppa över om filen redan ligger i en sorterad mindre-filer-mapp
+        if [[ "$dir_name" == *"-mindre-filer" ]]; then
+            continue
+        fi
+        
+        # Bygg den nya mappen: t.ex. .../stream_videos/AirlineVideosLive+-mindre-filer
+        new_dir="$base_save_dir/${dir_name}-mindre-filer"
+        mkdir -p "$new_dir"
+        
+        # Flytta filen
+        mv "$video_file" "$new_dir/"
+        echo "Flyttade liten fil: $(basename "$video_file") -> ${dir_name}-mindre-filer/"
+    done
+
+    # 4. Sista städning: Ta bort eventuella mappar som blev helt tomma efter flytten
+    find "$base_save_dir" -mindepth 1 -type d -empty -delete
+
+    echo "Filhanteringen är klar."
     exit 0
 }
 
 echo "Bevakning startad ($today). Logg sparas i: $log_file"
 
 while true; do
-    # NYTT: Skapar den nya filen baserad på scriptets namn om den saknas
     if [[ ! -f "$input_file" ]]; then
         echo "Hittar inte listan. Skapar en ny automatisk fil på: $input_file"
-        echo "# Lägg till Webbsite-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
+        echo "# Lägg till Webbsajt-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
         echo "# Rader som börjar med # hoppas över automatiskt" >> "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     elif [[ ! -s "$input_file" ]]; then
         echo "Fel: Listan ($input_file) är helt tom (0 kb)."
-        echo "# Lägg till Webbsite-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
+        echo "# Lägg till Webbsajt-namn eller hela URL-adresser här (ett per rad)" > "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     fi
@@ -143,7 +184,7 @@ while true; do
         touch "$lock_file"
         start_time=$(date "+%Y-%m-%d %H:%M:%S")
         
-        # NYTT: yt-dlp skapar nu undermappen själv baserat på profilnamn (uploader)
+        # yt-dlp skapar undermappen själv baserat på profilnamn (uploader)
         yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "${ffmpeg_args[@]}" \
             -o "$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s" "$url"
         
