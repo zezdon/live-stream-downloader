@@ -4,31 +4,48 @@
 base_save_dir=$HOME/stream_videos
 input_file=stream_recorder.txt
 log_file="$HOME/stream_history.log"
+config_file="$HOME/.ffmpeg_threads_config"
 # ---------------------
 
-# Kontrollera ffmpeg
+# 1. Kontrollera ffmpeg
 if ! command -v ffmpeg &> /dev/null; then
     echo "FEL: ffmpeg hittades inte. Installera med: sudo apt update && sudo apt install ffmpeg"
     exit 1
 fi
 
-mkdir -p "$base_save_dir"
+# 2. Hantera ffmpeg-trådar (fråga bara om config saknas)
+if [[ ! -f $config_file ]]; then
+    echo "--- Inställning för Raspberry Pi ---"
+    read -p "Vill du begränsa ffmpeg till 1 tråd för att spara CPU? (rekommenderas för Pi) (j/n): " thread_choice
+    if [[ $thread_choice =~ ^(j|J|ja|JA)$ ]]; then
+        echo "--downloader-args \"ffmpeg:-threads 1\"" > $config_file
+        echo "Inställning sparad: Använder 1 tråd."
+    else
+        echo "" > $config_file
+        echo "Inställning sparad: Använder standard (alla trådar)."
+    fi
+fi
+
+# Läs in inställningen från filen
+ffmpeg_args=$(cat $config_file)
+
+mkdir -p $base_save_dir
 
 cleanup_and_exit() {
     echo -e "\n"
     read -p "Vill du behålla de nedladdade filerna? (j/n): " choice
-    if [[ $choice =~ ^(n|N|nej|NEJ)$ ]]; then
+    if [[ "$choice" =~ ^(n|N|nej|NEJ)$ ]]; then
         echo -e "\a" # Ett litet varningsljud
         read -p "ÄR DU HELT SÄKER? Detta raderar ALLT i undermapparna! (j/n): " confirm
-        if [[ $confirm =~ ^(j|J|ja|JA)$ ]]; then
+        if [[ "$confirm" =~ ^(j|J|ja|JA)$ ]]; then        
             echo "Rensar undermappar i $base_save_dir..."
             find $base_save_dir/$actor -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
             echo "Allt raderat."
         else
-            echo "Radering avbruten. Filerna behålls."
+            echo "Radering avbruten. Filerna behålls."            
         fi
     else
-        echo "Filerna behålls."
+        echo "Filerna behålls."        
     fi
     exit 0
 }
@@ -40,41 +57,45 @@ while true; do
         echo "Fel: Hittar inte $input_file"
         exit 1
     fi
-
+    
     while IFS= read -r actor || [[ -n $actor ]]; do
-        [[ -z $actor ]] && continue
+        [[ -z "$actor" ]] && continue
 
-        url="https://example.com{actor}"
-        current_actor_dir=$base_save_dir/$actor
-        mkdir -p $current_actor_dir
+        url="https://twitch.tv{actor}"
+        current_actor_dir="$base_save_dir/$actor"
+        mkdir -p "$current_actor_dir"
 
         echo "--- Kollar: $actor ---"
         start_time=$(date "+%Y-%m-%d %H:%M:%S")
         
-        # Kör nedladdning
-        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate  -o $current_actor_dir/"%(title)s - %(upload_date)s.%(ext)s" https://example.com/${actor}
+        # Kör yt-dlp med de extra argumenten från config-filen
+        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate \
+            $ffmpeg_args \
+            -o $current_actor_dir/"%(title)s - %(upload_date)s.%(ext)s" \
+            https://twitch.tv/${actor}        
         
+        #    $url
         if [ $? -eq 0 ]; then
-            # Om status är 0 betyder det att yt-dlp har kört (laddat ner en stream)
+            # Om status är 0 betyder det att yt-dlp har kört (laddat ner en stream)        
             end_time=$(date "+%Y-%m-%d %H:%M:%S")
-            
+
             # Kolla om det är Twitch och hämta titel
-            log_entry="[$start_time till $end_time] $actor var ONLINE"
+            log_entry="[$start_time till $end_time] $actor ONLINE"
             if [[ $url == *"twitch.tv"* ]]; then
                 # Hämtar titeln snabbt med --get-title
-                title=$(yt-dlp --get-title --no-check-certificate $url 2>/dev/null)
+                title=$(yt-dlp --get-title --no-check-certificate "$url" 2>/dev/null)
                 log_entry=$log_entry - Titel: $title
             fi
-            
+
             echo "$log_entry" >> "$log_file"
         else
             wait_time=$(( ( RANDOM % 14 ) + 2 ))
             echo "Offline: Väntar $wait_time sekunder..."
-            read -t "$wait_time" -n 1 key
+            read -t $wait_time -n 1 key
             [[ $key == "q" ]] && cleanup_and_exit
         fi
     done < $input_file
-
+    
     read -t 5 -n 1 key
     [[ $key == "q" ]] && cleanup_and_exit
 done
