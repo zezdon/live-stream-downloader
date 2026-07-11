@@ -1,13 +1,16 @@
 #!/bin/bash
 # Vänta på nätverk vid autostart så systemet hinner ansluta
-#sleep 10
+sleep 10
 
 # --- KONFIGURATION ---
-input_file="$HOME/stream_recorder.txt"
-base_save_dir="$HOME/stream_videos"
+# Tar reda på mappen där scriptet ligger och letar efter stream_recorder.txt där
+script_dir=$(dirname "$(readlink -f "$0")")
+input_file="$script_dir/stream_recorder.txt"
+
+base_save_dir="$HOME/twitch_videos"
 log_file="$HOME/stream_history.log"
 config_file="$HOME/.ffmpeg_threads_config"
-temp_dir="/tmp/stream_locks"
+temp_dir="/tmp/twitch_locks"
 today=$(date +%Y%m%d)
 # ---------------------
 
@@ -66,6 +69,7 @@ cleanup_and_exit() {
         if [[ "$confirm" =~ ^(j|J|ja|JA)$ ]]; then
             find "$base_save_dir" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
             echo "Alla mappar och filer har raderats."
+            exit 0
         else
             echo "Radering avbruten. Rensar tomma mappar men behåller dina inspelningar..."
             find "$base_save_dir" -mindepth 1 -type d -empty -delete
@@ -76,6 +80,18 @@ cleanup_and_exit() {
         find "$base_save_dir" -mindepth 1 -type d -empty -delete
         echo "Filerna behålls."
     fi
+
+    # Hantera avbrutna .part-filer och rensa skräp under 100kb
+    echo "Letar efter avbrutna inspelningar (.part-filer)..."
+    find "$base_save_dir" -type f -name "*.mp4.part" -size -100k -delete
+    
+    find "$base_save_dir" -type f -name "*.mp4.part" | while read -r part_file; do
+        new_file="${part_file%.mp4.part}-avbruten.mp4"
+        mv "$part_file" "$new_file"
+        echo "Fixade fil: $(basename "$part_file") -> $(basename "$new_file")"
+    done
+    echo "Filhanteringen är klar."
+
     exit 0
 }
 
@@ -83,8 +99,25 @@ echo "Bevakning startad ($today). Logg sparas i: $log_file"
 
 # Huvudloop som körs för evigt tills 'q' trycks ned
 while true; do
+    # 1. Om filen saknas helt, skapa en ny med instruktioner
     if [[ ! -f "$input_file" ]]; then
-        echo "Fel: Hittar inte listan med streamers på: $input_file"
+        echo "Hittar inte listan med streamers. Skapar en ny automatisk fil på: $input_file"
+        
+        echo "# Lägg till dina Twitch-streamers här (ett namn per rad)" > "$input_file"
+        echo "# Ta bort raden nedan och ersätt med valfria namn:" >> "$input_file"
+        echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
+        
+        echo "En ny 'actors.txt' har skapats. Öppna den och lägg till dina streamers. Avslutar..."
+        exit 1
+
+    # 2. Om filen finns men råkar vara tom (0 kb), fyll på den igen
+    elif [[ ! -s "$input_file" ]]; then
+        echo "Fel: Listan med streamers ($input_file) är helt tom (0 kb)."
+        
+        echo "# Lägg till dina Twitch-streamers här (ett namn per rad)" > "$input_file"
+        echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
+        
+        echo "Återställde instruktioner i 'actors.txt'. Öppna filen och lägg till namn. Avslutar..."
         exit 1
     fi
 
@@ -106,7 +139,7 @@ while true; do
             fi
 
             # Korrekt URL utan dolda eller dubbla snedstreck
-            url="https://example.com/${actor}"
+            url="https://twitch.tv/${actor}"
             current_actor_dir="$base_save_dir/$actor"
             mkdir -p "$current_actor_dir"
 
