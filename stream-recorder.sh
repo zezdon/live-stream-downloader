@@ -1,35 +1,35 @@
 #!/bin/bash
 
 # --- KONFIGURATION ---
-
 base_save_dir=$HOME/stream_videos
 input_file=stream_recorder.txt
-log_file=$base_save_dir/stream_history.log
+log_file="$HOME/stream_history.log"
 # ---------------------
 
-# 1. Kontrollera om ffmpeg finns installerat
+# Kontrollera ffmpeg
 if ! command -v ffmpeg &> /dev/null; then
-    echo "FEL: ffmpeg hittades inte. Installera det med: sudo apt update && sudo apt install ffmpeg"
+    echo "FEL: ffmpeg hittades inte. Installera med: sudo apt update && sudo apt install ffmpeg"
     exit 1
-else
-    echo "Systemkontroll: ffmpeg är installerat."
 fi
 
-mkdir -p $base_save_dir
+mkdir -p "$base_save_dir"
 
 cleanup_and_exit() {
     echo -e "\n"
-    read -p "Vill du behålla de nedladdade filerna i mappen? (j/n): " choice
-    case $choice in 
-        n|N|nej|NEJ)
+    read -p "Vill du behålla de nedladdade filerna? (j/n): " choice
+    if [[ $choice =~ ^(n|N|nej|NEJ)$ ]]; then
+        echo -e "\a" # Ett litet varningsljud
+        read -p "ÄR DU HELT SÄKER? Detta raderar ALLT i undermapparna! (j/n): " confirm
+        if [[ $confirm =~ ^(j|J|ja|JA)$ ]]; then
             echo "Rensar undermappar i $base_save_dir..."
             find $base_save_dir/$actor -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
-            echo "Rensning klar."
-            ;;
-        *)
-            echo "Filerna behålls."
-            ;;
-    esac
+            echo "Allt raderat."
+        else
+            echo "Radering avbruten. Filerna behålls."
+        fi
+    else
+        echo "Filerna behålls."
+    fi
     exit 0
 }
 
@@ -44,31 +44,35 @@ while true; do
     while IFS= read -r actor || [[ -n $actor ]]; do
         [[ -z $actor ]] && continue
 
+        url="https://example.com{actor}"
         current_actor_dir=$base_save_dir/$actor
         mkdir -p $current_actor_dir
 
         echo "--- Kollar: $actor ---"
-        
-        # Logga att vi kollar streamern
         start_time=$(date "+%Y-%m-%d %H:%M:%S")
         
+        # Kör nedladdning
         yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate  -o $current_actor_dir/"%(title)s - %(upload_date)s.%(ext)s" https://example.com/${actor}
         
-        status=$?
-
-        if [ $status -eq 0 ]; then
+        if [ $? -eq 0 ]; then
             # Om status är 0 betyder det att yt-dlp har kört (laddat ner en stream)
             end_time=$(date "+%Y-%m-%d %H:%M:%S")
-            echo "[$start_time till $end_time] $actor var ONLINE" >> "$log_file"
-            echo "Loggat: $actor var online."
+            
+            # Kolla om det är Twitch och hämta titel
+            log_entry="[$start_time till $end_time] $actor var ONLINE"
+            if [[ $url == *"twitch.tv"* ]]; then
+                # Hämtar titeln snabbt med --get-title
+                title=$(yt-dlp --get-title --no-check-certificate $url 2>/dev/null)
+                log_entry=$log_entry - Titel: $title
+            fi
+            
+            echo "$log_entry" >> "$log_file"
         else
-            # Om offline, slumpmässig paus
             wait_time=$(( ( RANDOM % 14 ) + 2 ))
             echo "Offline: Väntar $wait_time sekunder..."
-            read -t $wait_time -n 1 key
+            read -t "$wait_time" -n 1 key
             [[ $key == "q" ]] && cleanup_and_exit
         fi
-
     done < $input_file
 
     read -t 5 -n 1 key
