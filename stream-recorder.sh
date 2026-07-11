@@ -43,7 +43,7 @@ random_start_sleep=$(( ( RANDOM % start_interval ) + min_sleep ))
 echo "Systemet startar. Väntar i en slumpmässig fördröjning på $random_start_sleep sekunder (mellan $min_sleep och $max_sleep)..."
 echo "-> Tryck på en tangent för att hoppa över väntetiden och starta direkt."
 
-read -t "$random_start_sleep" -n 1 key
+read -t "$random_start_sleep" -n 1 key < /dev/tty
 if [[ -n "$key" ]]; then
     echo -e "\nHoppar över fördröjningen och startar direkt..."
 fi
@@ -119,7 +119,7 @@ cleanup_and_exit() {
             echo "Alla mappar och filer har raderats."
             exit 0
         else
-            echo "Rering avbruten. Rensar tomma mappar men behåller dina inspelningar..."
+            echo "Radering avbruten. Rensar tomma mappar men behåller dina inspelningar..."
             find "$base_save_dir" -mindepth 1 -type d -empty -delete
             echo "Klara inspelningar sparades. Tomma mappar togs bort."
         fi
@@ -164,31 +164,36 @@ echo "Bevakning startad ($today). Logg sparas i: $log_file"
 while true; do
     if [[ ! -f "$input_file" ]]; then
         echo "Hittar inte listan. Skapar en ny automatisk fil på: $input_file"
-        echo "# Lägg till Webbsida-namn, hela URL-adresser eller delay(sekunder) här" > "$input_file"
+        echo "# Lägg till Webbsida-namn, hela URL-adresser, delay(sekunder) eller url(länk, \"Mappnamn\") här" > "$input_file"
         echo "# Rader som börjar med # hoppas över automatiskt" >> "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     elif [[ ! -s "$input_file" ]]; then
         echo "Fel: Listan ($input_file) är helt tom (0 kb)."
-        echo "# Lägg till Webbsida-namn, hela URL-adresser eller delay(sekunder) här" > "$input_file"
+        echo "# Lägg till Webbsida-namn, hela URL-adresser, delay(sekunder) eller url(länk, \"Mappnamn\") här" > "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     fi
 
-    # KORRIGERING: Vi läser filen via kanal 3 (u3) istället för standard stdin (<)
+    # Vi läser filen via kanal 3 (u3)
     while IFS= read -r raw_line <&3 || [[ -n "$raw_line" ]]; do
+        # 1. Ta bort kommentarer
         clean_line=$(echo "$raw_line" | sed 's/#.*//')
-        item=$(echo "$clean_line" | tr -d '\r\n\t ')
+        
+        # KORRIGERING: Ta bort dolda Windows-kontrolltecken (\r) men behåll vanliga mellanslag
+        clean_line=$(echo "$clean_line" | tr -d '\r\n\t')
+        
+        # Trimma endast mellanslag i början och slutet av raden
+        item=$(echo "$clean_line" | xargs)
         
         [[ -z "$item" ]] && continue
 
-        # Kolla efter delay(sekunder) - Fungerar nu med både stort och litet D
+        # --- FUNKTION: Kolla efter delay(sekunder) ---
         if [[ "$item" =~ ^[dD]elay\(([0-9]+)\)$ ]]; then
             custom_delay="${BASH_REMATCH[1]}"
             echo "--- Manuellt kommando: Pausar i $custom_delay sekunder ---"
             echo "-> Tryck 'q' för att hoppa över pausen."
             
-            # Vi tvingar read att lyssna på tangentbordet (< /dev/tty)
             read -t "$custom_delay" -n 1 delay_key < /dev/tty
             if [[ "$delay_key" == "q" ]]; then
                 read -t 2 -n 1 -p "Vill du avsluta hela skriptet? (q för ja, vänta för att hoppa över): " confirm_key < /dev/tty
@@ -200,11 +205,37 @@ while true; do
             continue
         fi
 
+        # --- FUNKTION: Avancerad URL- och Mappväljare (MED KOMMA-KONTROLL) ---
+        custom_folder=""
+        if [[ "$item" =~ ^[uU]rl\( ]]; then
+            # SÄKERHETSSPÄRR: Kolla om raden saknar ett kommatecken
+            if [[ "$item" != *","* ]]; then
+                echo "-> FEL: Raden '$item' saknar kommatecken (,). Hoppar över..."
+                continue
+            fi
+
+            # 1. Klipp ut allt efter "url(" fram till kommatecknet
+            extracted_url=$(echo "$item" | sed -E "s/^[uU]rl\(([^,]+),.*/\1/" | xargs)
+            
+            # 2. Klipp ut allt efter kommatecknet till slutet av raden
+            extracted_folder=$(echo "$item" | cut -d',' -f2-)
+            
+            # 3. Tvätta mappnamnet: ta bort slutparentes och alla typer av citationstecken
+            custom_folder=$(echo "$extracted_folder" | tr -d ')"' | tr -d "'" | xargs)
+            
+            # 4. Sätt variabeln item till den rena länken
+            item="$extracted_url"
+            
+            echo "-> Identifierade specialkommando!"
+            echo "-> Länk: $item"
+            echo "-> Mapp: $custom_folder"
+        fi
+        # ---------------------------------------------------------------------
+
         item="${item#/}"
         item="${item%/}"
 
-        # URL-byggaren som du korrigerade med rätt dollartecken och snedstreck
-        if [[ "$item" == https://* || "$item" == http://* ]]; then
+        if [[ "$item" == http://* || "$item" == https://* ]]; then
             url="$item"
         elif [[ "$item" == *twitch.tv* ]]; then
             url="https://${item}"
@@ -224,9 +255,17 @@ while true; do
         touch "$lock_file"
         start_time=$(date "+%Y-%m-%d %H:%M:%S")
         
-        # KORRIGERING: Vi tvingar yt-dlp att stänga sin stdin (</dev/null) så den inte stjäl bokstäver
+        # Bestäm utmatningsformat (Dynamisk mapp eller standard från yt-dlp)
+        if [[ -n "$custom_folder" ]]; then
+            output_template="$base_save_dir/${custom_folder}/%(title)s - %(upload_date)s.%(ext)s"
+            echo "-> Sparas i egen vald mapp: $custom_folder"
+        else
+            output_template="$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s"
+        fi
+
+        # Kör yt-dlp och stäng dess stdin
         yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "${ffmpeg_args[@]}" \
-            -o "$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s" "$url" </dev/null
+            -o "$output_template" "$url" </dev/null
         
         status=$?
         rm -f "$lock_file"
@@ -244,11 +283,9 @@ while true; do
             wait_time=$(( ( RANDOM % sleep_interval ) + 2 ))
             echo "Offline/Klar: Väntar $wait_time sekunder..."
             
-            # Vi tvingar offline-pausen att lyssna på tangentbordet (< /dev/tty)
             read -t "$wait_time" -n 1 key < /dev/tty
             [[ $key == "q" ]] && cleanup_and_exit
         fi
-    # Vi öppnar filen på kanal 3 här (3<)
     done 3< "$input_file"
 
     read -t 5 -n 1 key < /dev/tty
