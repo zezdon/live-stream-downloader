@@ -48,27 +48,13 @@ if [[ -n "$key" ]]; then
     echo -e "\nHoppar över fördröjningen och startar direkt..."
 fi
 
-# 3. För-skanning av textfilen efter clean(yes/no) och overwrite(yes/no)
+# 3. För-skanning av textfilen efter ENDAST clean(yes/no) vid uppstart
 auto_clean=""
-overwrite_mode="--no-overwrites" # Standardbeteende om det inte anges i filen
-
 if [[ -f "$input_file" ]]; then
-    # Kolla clean-inställning
     if grep -iq "^[[:space:]]*clean(yes)" "$input_file"; then
         auto_clean="yes"
     elif grep -iq "^[[:space:]]*clean(no)" "$input_file"; then
         auto_clean="no"
-    fi
-
-    # NYTT: Kolla overwrite-inställning
-    if grep -iq "^[[:space:]]*overwrite(yes)" "$input_file"; then
-        overwrite_mode="--force-overwrites"
-        echo "System: Överskrivning AKTIVERAD (overwrite=yes). Gamla filer skrivs över."
-    elif grep -iq "^[[:space:]]*overwrite(no)" "$input_file"; then
-        overwrite_mode="--no-overwrites"
-        echo "System: Överskrivning INAKTIVERAD (overwrite=no). Befintliga filer hoppas över."
-    else
-        echo "System: Ingen overwrite-inställning hittades. Använder standard (hoppa över befintliga filer)."
     fi
 fi
 
@@ -79,10 +65,8 @@ if [[ -n "$old_locks" ]]; then
     if [[ "$auto_clean" == "yes" ]]; then
         find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" -delete 2>/dev/null
     elif [[ "$auto_clean" == "no" ]]; then
-            # Automatisk ignorering (Tyst)
-        : # Gör ingenting 
+        : 
     else
-        # Inget kommando hittades i filen - ställ den vanliga frågan    
         echo "Hittade gamla lock-filer från tidigare dagar."
         read -p "Vill du rensa gamla låsfiler innan start? (j/n): " purge_choice
         if [[ "$purge_choice" =~ ^(j|J|ja|JA)$ ]]; then
@@ -196,36 +180,54 @@ echo "Bevakning startad ($today). Logg sparas i: $log_file"
 while true; do
     if [[ ! -f "$input_file" ]]; then
         echo "Hittar inte listan. Skapar en ny automatisk fil på: $input_file"
-        echo "# Lägg till Webbsite(Webbsajt)-namnet, hela URL-adresser, delay(sekunder) eller url(länk, \"Mappnamn\") här" > "$input_file"
+        echo "# Lägg till Webbsite(webbsajt)-namn, hela URL-adresser, delay(sekunder) eller url(länk, \"Mappnamn\") här" > "$input_file"
         echo "# Rader som börjar med # hoppas över automatiskt" >> "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     elif [[ ! -s "$input_file" ]]; then
         echo "Fel: Listan ($input_file) är helt tom (0 kb)."
-        echo "# Lägg till Webbsite(Webbsajt)-namnet, hela URL-adresser, delay(sekunder) eller url(länk, \"Mappnamn\") här" > "$input_file"
+        echo "# Lägg till Webbsite(webbsajt)-namn, hela URL-adresser, delay(sekunder) eller url(länk, \"Mappnamn\") här" > "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
     fi
 
-    # Vi läser filen via kanal 3 (u3)
+    # Standardinställningar vid början av VARJE nytt varv genom listan
+    current_overwrite_mode="--no-overwrites"
+    current_dirkeep_active="no"
+
+    # Vi läser filen via kanal 3
     while IFS= read -r raw_line <&3 || [[ -n "$raw_line" ]]; do
-        # 1. Ta bort kommentarer
         clean_line=$(echo "$raw_line" | sed 's/#.*//')
-        
-        # KORRIGERING: Ta bort dolda Windows-kontrolltecken (\r) men behåll vanliga mellanslag
         clean_line=$(echo "$clean_line" | tr -d '\r\n\t')
-        
-        # Trimma endast mellanslag i början och slutet av raden
         item=$(echo "$clean_line" | xargs)
         
         [[ -z "$item" ]] && continue
-        
-        # --- NY FUNKTION: Hoppa över både clean() och overwrite() i loopen ---
-        if [[ "$item" =~ ^[cC]lean\( || "$item" =~ ^[oO]verwrite\( ]]; then
+
+        # 1. Hoppa över clean() i loopen (sköts separat vid start via grep)
+        if [[ "$item" == clean\(* || "$item" == Clean\(* ]]; then
             continue
         fi
 
-        # --- FUNKTION: Kolla efter delay(sekunder) ---
+        # 2. SKOTTSÄKER DYNAMISK OVERWRITE (Ingen krånglig RegEx som stör VS Code)
+        if [[ "$item" == overwrite\(* || "$item" == Overwrite\(* ]]; then
+            # Vi kollar helt enkelt vad som står inuti raden
+            if [[ "$item" == *"yes"* ]]; then
+                current_overwrite_mode="--force-overwrites"
+                current_dirkeep_active="no"
+                echo "-> Ändrar läge: Överskrivning AKTIVERAD (overwrite=yes)"
+            elif [[ "$item" == *"dirkeep"* ]]; then
+                current_overwrite_mode="--no-overwrites"
+                current_dirkeep_active="yes"
+                echo "-> Ändrar läge: Mapp-bevakning AKTIVERAD (overwrite=dirkeep)"
+            elif [[ "$item" == *"no"* || "$item" == *"keep"* ]]; then
+                current_overwrite_mode="--no-overwrites"
+                current_dirkeep_active="no"
+                echo "-> Ändrar läge: Överskrivning INAKTIVERAD (overwrite=no/keep)"
+            fi
+            continue
+        fi
+
+        # 3. FUNKTION: Kolla efter delay(sekunder)
         if [[ "$item" =~ ^[dD]elay\(([0-9]+)\)$ ]]; then
             custom_delay="${BASH_REMATCH[1]}"
             echo "--- Manuellt kommando: Pausar i $custom_delay sekunder ---"
@@ -242,32 +244,22 @@ while true; do
             continue
         fi
 
-        # --- FUNKTION: Avancerad URL- och Mappväljare (MED KOMMA-KONTROLL) ---
+        # 4. FUNKTION: Avancerad URL- och Mappväljare
         custom_folder=""
-        if [[ "$item" =~ ^[uU]rl\( ]]; then
-            # SÄKERHETSSPÄRR: Kolla om raden saknar ett kommatecken
+        if [[ "$item" == url\(* || "$item" == Url\(* ]]; then
             if [[ "$item" != *","* ]]; then
                 echo "-> FEL: Raden '$item' saknar kommatecken (,). Hoppar över..."
                 continue
             fi
-
-            # 1. Klipp ut allt efter "url(" fram till kommatecknet
             extracted_url=$(echo "$item" | sed -E "s/^[uU]rl\(([^,]+),.*/\1/" | xargs)
-            
-            # 2. Klipp ut allt efter kommatecknet till slutet av raden            
             extracted_folder=$(echo "$item" | cut -d',' -f2-)
-
-            # 3. Tvätta mappnamnet: ta bort slutparentes och alla typer av citationstecken            
             custom_folder=$(echo "$extracted_folder" | tr -d ')"' | tr -d "'" | xargs)
-
-            # 4. Sätt variabeln item till den rena länken
             item="$extracted_url"
             
             echo "-> Identifierade specialkommando!"
             echo "-> Länk: $item"
             echo "-> Mapp: $custom_folder"
         fi
-        # ---------------------------------------------------------------------
 
         item="${item#/}"
         item="${item%/}"
@@ -277,7 +269,27 @@ while true; do
         elif [[ "$item" == *twitch.tv* ]]; then
             url="https://${item}"
         else
-            url="https://example.com{item}"
+            url="https://twitch.tv{item}"
+        fi
+
+        # 5. DYNAMISK MAPP-BEVAKNING (dirkeep - FIXAD OCH FÖNSTERSÄKRAD)
+        if [[ "$current_dirkeep_active" == "yes" ]]; then
+            check_folder="$custom_folder"
+            if [[ -z "$check_folder" ]]; then
+                check_folder="${url##*/}"
+            fi
+            
+            # Vi bygger namnet på lock-filen helt korrekt
+            check_safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
+            check_lock_file="$temp_dir/${today}-${check_safe_name}.lock"
+
+            if [[ -f "$check_lock_file" ]]; then
+                echo "--- Mappen '$check_folder' hanteras just nu av ett annat fönster. Hoppar över! ---"
+                continue
+            elif [[ -d "$base_save_dir/$check_folder" ]] && [ "$(find "$base_save_dir/$check_folder" -maxdepth 1 -type f | wc -l)" -gt 0 ]; then
+                echo "--- Mappen '$check_folder' finns redan och har innehåll. Hoppar över blixtsnabbt! ---"
+                continue
+            fi
         fi
 
         safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
@@ -292,7 +304,6 @@ while true; do
         touch "$lock_file"
         start_time=$(date "+%Y-%m-%d %H:%M:%S")
         
-        # Bestäm utmatningsformat (Dynamisk mapp eller standard från yt-dlp)
         if [[ -n "$custom_folder" ]]; then
             output_template="$base_save_dir/${custom_folder}/%(title)s - %(upload_date)s.%(ext)s"
             echo "-> Sparas i egen vald mapp: $custom_folder"
@@ -300,9 +311,8 @@ while true; do
             output_template="$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s"
         fi
 
-        # Kör yt-dlp och stäng dess stdin
-        # NYTT: Vi har lagt till variabeln "$overwrite_mode" i kommandot
-        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$overwrite_mode" "${ffmpeg_args[@]}" \
+        # Kör yt-dlp med det för stunden gällande overwrite-läget
+        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
             -o "$output_template" "$url" </dev/null
         
         status=$?
