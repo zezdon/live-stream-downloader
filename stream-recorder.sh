@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # --- KONFIGURATION ---
+# Tar reda på mappen där scriptet ligger
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -21,7 +22,7 @@ mkdir -p "$temp_dir"
 # 1. Hantera inställning för slumpmässig paus
 if [[ ! -f "$sleep_config_file" ]]; then
     echo "--- Inställning för slumpmässig paus ---"
-    read -p "Ange maximal väntetid i sekunder när en kanal är offline (eller tryck ENTER för 15): " sleep_choice
+    read -p "Ange maximal väntetid i sekunder när en kanal är offline (eller tryck ENTER for 15): " sleep_choice
     if [[ -z "$sleep_choice" ]]; then
         sleep_choice="15"
     fi
@@ -50,11 +51,28 @@ fi
 
 # 3. För-skanning av textfilen efter ENDAST clean(yes/no) vid uppstart
 auto_clean=""
+overwrite_mode="--no-overwrites"
+dirkeep_active="no"
+
 if [[ -f "$input_file" ]]; then
     if grep -iq "^[[:space:]]*clean(yes)" "$input_file"; then
         auto_clean="yes"
     elif grep -iq "^[[:space:]]*clean(no)" "$input_file"; then
         auto_clean="no"
+    fi
+
+    if grep -iq "^[[:space:]]*overwrite(yes)" "$input_file"; then
+        overwrite_mode="--force-overwrites"
+        echo "System: Överskrivning AKTIVERAD (overwrite=yes)."
+    elif grep -iq "^[[:space:]]*overwrite(dirkeep)" "$input_file"; then
+        overwrite_mode="--no-overwrites"
+        dirkeep_active="yes"
+        echo "System: Mapp-bevakning AKTIVERAD (overwrite=dirkeep). Befintliga mappar hoppas över helt."
+    elif grep -iq "^[[:space:]]*overwrite(no)" "$input_file" || grep -iq "^[[:space:]]*overwrite(keep)" "$input_file"; then
+        overwrite_mode="--no-overwrites"
+        echo "System: Överskrivning INAKTIVERAD (overwrite=no/keep). Filer kontrolleras individuellt."
+    else
+        echo "System: Ingen overwrite-inställning hittades. Använder standard (no-overwrites)."
     fi
 fi
 
@@ -82,9 +100,9 @@ if ! command -v ffmpeg &> /dev/null; then
     exit 1
 fi
 
-# 5. Hantera inställning för ffmpeg-trådar
+# 5. Hantera inställning for ffmpeg-trådar
 if [[ ! -f "$config_file" ]]; then
-    read -p "Begränsa ffmpeg till 1 tråd? (Rekommenderas för Raspberry Pi) (j/n): " thread_choice
+    read -p "Begränsa ffmpeg till 1 tråd? (Rekommenderas for Raspberry Pi) (j/n): " thread_choice
     if [[ "$thread_choice" =~ ^(j|J|ja|JA)$ ]]; then
         echo "1" > "$config_file"
     else
@@ -100,10 +118,10 @@ else
     echo "System: Använder standard (alla trådar)."
 fi
 
-# 6. Hantera inställning för rensning av skräpfiler
+# 6. Hantera inställning for rensning av skräpfiler
 if [[ ! -f "$size_config_file" ]]; then
-    echo "--- Inställning för rensning av skräpfiler ---"
-    read -p "Hur små avbrutna filer ska raderas? Ange i kb (t.ex. 500), eller tryck bara ENTER för 1000kb: " size_choice
+    echo "--- Inställning for rensning av skräpfiler ---"
+    read -p "Hur små avbrutna filer ska raderas? Ange i kb (t.ex. 500), eller tryck bara ENTER for 1000kb: " size_choice
     if [[ -z "$size_choice" ]]; then
         size_choice="1000"
     fi
@@ -119,7 +137,7 @@ if [ $sleep_interval -le 0 ]; then
     sleep_interval=1
 fi
 
-# Skapa huvudmappen för videofiler
+# Skapa huvudmappen for videofiler
 mkdir -p "$base_save_dir"
 
 cleanup_and_exit() {
@@ -208,9 +226,8 @@ while true; do
             continue
         fi
 
-        # 2. SKOTTSÄKER DYNAMISK OVERWRITE (Ingen krånglig RegEx som stör VS Code)
+        # 2. SKOTTSÄKER DYNAMISK OVERWRITE
         if [[ "$item" == overwrite\(* || "$item" == Overwrite\(* ]]; then
-            # Vi kollar helt enkelt vad som står inuti raden
             if [[ "$item" == *"yes"* ]]; then
                 current_overwrite_mode="--force-overwrites"
                 current_dirkeep_active="no"
@@ -251,9 +268,16 @@ while true; do
                 echo "-> FEL: Raden '$item' saknar kommatecken (,). Hoppar över..."
                 continue
             fi
+            # 1. Klipp ut allt efter "url(" fram till kommatecknet
             extracted_url=$(echo "$item" | sed -E "s/^[uU]rl\(([^,]+),.*/\1/" | xargs)
+
+            # 2. Klipp ut allt efter kommatecknet till slutet av raden
             extracted_folder=$(echo "$item" | cut -d',' -f2-)
+            
+            # 3. Tvätta mappnamnet: ta bort slutparentes och alla typer av citationstecken
             custom_folder=$(echo "$extracted_folder" | tr -d ')"' | tr -d "'" | xargs)
+
+            # 4. Sätt variabeln item till den rena länken
             item="$extracted_url"
             
             echo "-> Identifierade specialkommando!"
@@ -266,10 +290,10 @@ while true; do
 
         if [[ "$item" == http://* || "$item" == https://* ]]; then
             url="$item"
-        elif [[ "$item" == *twitch.tv* ]]; then
+        elif [[ "$item" == twitch.tv ]]; then
             url="https://${item}"
         else
-            url="https://twitch.tv{item}"
+            url="twitch.tv{item}"
         fi
 
         # 5. DYNAMISK MAPP-BEVAKNING (dirkeep - FIXAD OCH FÖNSTERSÄKRAD)
@@ -322,7 +346,7 @@ while true; do
             end_time=$(date "+%Y-%m-%d %H:%M:%S")
             log_entry="[$start_time till $end_time] $url ONLINE"
             
-            if [[ "$url" == *"twitch.tv"* ]]; then
+            if [[ "$url" == *"twitch.tv" ]]; then
                 title=$(yt-dlp --get-title --no-check-certificate "$url" 2>/dev/null)
                 log_entry="$log_entry - Titel: $title"
             fi
