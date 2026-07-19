@@ -45,3 +45,48 @@ twitch.tv/limealicious
 - **Twitch-kanaler:** Du kan skriva antingen bara det rena kanalnamnet (`morrog`), halva webbadressen (`twitch.tv/limealicious`) eller hela adressen (`https://twitch.tv`). Skriptet förstår alla tre formaten automatiskt.
 - **YouTube-länkar:** Klistra alltid in den exakta och fullständiga URL-adressen från din webbläsare när du vill bevaka en specifik livesändning eller ladda ner ett videoklipp.
 - **Kommentarer:** Rader som börjar med `#` hoppas automatiskt över av skriptet, vilket gör det enkelt att organisera listan.
+
+## Avancerade funktioner och specialkommandon
+
+Skriptet innehåller flera unika kommandon som du kan skriva direkt i din textfil för att styra hur mappar skapas, hur pauser hanteras och hur skriptet ska bete sig när filer redan existerar.
+
+### 1. Skräddarsydda mappnamn: `url(adress, "mappnamn")`
+Standardbeteendet för skriptet är att automatiskt skapa en undermapp baserad på kanalens eller profilens riktiga namn. Om du vill ha en egen struktur och själv bestämma vad mappen ska heta, använder du kommandot `url()` med två parametrar separerade med ett kommatecken:
+* **Parameter 1:** Den internetadress (URL) som ska laddas ner eller spelas in.
+* **Parameter 2:** Det namn du vill att undermappen ska få på din hårddisk (omges av enkla eller dubbla citationstecken).
+
+*Exempel:*
+```text
+url(https://youtube.com, "Heathrow Airport")
+```
+Detta tvingar skriptet att spara alla videor från den strömmen i en mapp som heter exakt `Heathrow Airport`.
+
+### 2. Blixtsnabb mappkontroll: `overwrite(dirkeep)`
+När du anger en länk till en hel profil (till exempel en TikTok-profil) brukar verktyget ladda ner alla tillgängliga offentliga videoklipp från den användaren. Om profilen har hundratals videor tar det väldigt lång tid för systemet att skanna igenom hela listan varje gång skriptet startar om, bara för att kontrollera att filerna redan finns.
+
+För att lösa detta använder du kommandot `overwrite(dirkeep)`. 
+
+När `overwrite(dirkeep)` är aktiverat gör skriptet en blixtsnabb kontroll *innan* nedladdningen ens startar: **Om mappen för den profilen redan existerar på din hårddisk och innehåller filer, hoppas hela raden över omedelbart på under en sekund.** Systemet går direkt vidare till nästa rad i listan utan att slösa tid eller nätverkstrafik.
+
+### 3. Återställa kontrollen: `overwrite(no)`
+När du har kört en TikTok-profil med `dirkeep` vill du oftast att dina vanliga Twitch- eller YouTube-livesändningar ska kontrolleras som vanligt (så att de spelas in om de går online, även om mappen redan finns). Då skriver du helt enkelt `overwrite(no)` på raden efter för att stänga av den snabba mappkontrollen.
+
+## Komplett exempel på en avancerad lista
+
+Här är ett exempel på hur din textfil kan se ut när du kombinerar alla dessa smarta funktioner för att skapa ett effektivt flöde:
+
+```text
+# Stäng av frågan om gamla låsfiler vid uppstart
+initclean(no)
+
+# Slå på snabb mappkontroll för TikTok (skannar inte 300+ filer om mappen finns)
+overwrite(dirkeep)
+delay(7)
+url(https://tiktok.com, "profilnamn")
+delay(5)
+
+# Återställ till standardläge för vanliga livesändningar (så att de spelas in)
+overwrite(no)
+url(https://youtube.com, "Boten Anna")
+delay(5)
+```
