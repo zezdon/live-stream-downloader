@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # --- KONFIGURATION ---
-# Tar reda på mappen där scriptet ligger
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -13,7 +12,6 @@ config_file="$HOME/.ffmpeg_threads_config"
 size_config_file="$HOME/.file_size_config"
 sleep_config_file="$HOME/.sleep_config"
 temp_dir="/tmp/stream_locks"
-today=$(date +%Y%m%d)
 # ---------------------
 
 # Skapa temp-mappen om den inte existerar
@@ -49,15 +47,16 @@ if [[ -n "$key" ]]; then
     echo -e "\nHoppar över fördröjningen och startar direkt..."
 fi
 
-# 3. För-skanning av textfilen efter ENDAST clean(yes/no) vid uppstart
+# 3. För-skanning av textfilen efter initclean och overwrite
 auto_clean=""
 overwrite_mode="--no-overwrites"
 dirkeep_active="no"
 
 if [[ -f "$input_file" ]]; then
-    if grep -iq "^[[:space:]]*clean(yes)" "$input_file"; then
+    # NYTT: Letar efter initclean(yes/no) med stöd för alla skiftlägen (t.ex InitClean)
+    if grep -iq "^[[:space:]]*initclean(yes)" "$input_file"; then
         auto_clean="yes"
-    elif grep -iq "^[[:space:]]*clean(no)" "$input_file"; then
+    elif grep -iq "^[[:space:]]*initclean(no)" "$input_file"; then
         auto_clean="no"
     fi
 
@@ -76,19 +75,18 @@ if [[ -f "$input_file" ]]; then
     fi
 fi
 
-# Kolla efter gamla lock-filer som inte tillhör dagens datum
-old_locks=$(find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" 2>/dev/null)
-
-if [[ -n "$old_locks" ]]; then
-    if [[ "$auto_clean" == "yes" ]]; then
-        find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" -delete 2>/dev/null
-    elif [[ "$auto_clean" == "no" ]]; then
-        : 
-    else
-        echo "Hittade gamla lock-filer från tidigare dagar."
+# NYTT: Om initclean(yes) är aktiverat, rensar vi alla gamla filer i mappen direkt
+if [[ "$auto_clean" == "yes" ]]; then
+    rm -f "$temp_dir"/*.lock 2>/dev/null
+elif [[ "$auto_clean" == "no" ]]; then
+    : # Gör ingenting dämpat
+else
+    # Om inget hittades i filen, kolla om det finns låsfiler och ställ frågan
+    if [ "$(find "$temp_dir" -name "*.lock" 2>/dev/null | wc -l)" -gt 0 ]; then
+        echo "Hittade gamla lock-filer från tidigare körningar."
         read -p "Vill du rensa gamla låsfiler innan start? (j/n): " purge_choice
         if [[ "$purge_choice" =~ ^(j|J|ja|JA)$ ]]; then
-            find "$temp_dir" -name "*.lock" ! -name "${today}-*.lock" -delete 2>/dev/null
+            rm -f "$temp_dir"/*.lock 2>/dev/null
             echo "Gamla låsfiler raderade."
         fi
     fi
@@ -142,7 +140,12 @@ mkdir -p "$base_save_dir"
 
 cleanup_and_exit() {
     echo -e "\n"
-    rm -f "$temp_dir/${today}-"*.lock
+    # NYTT: Vi letar efter låsfiler som skapats av just den här terminalens Process-ID (sub-skal) och städar bort dem
+    find "$temp_dir" -name "*.lock" -type f | while read -r lock_f; do
+        if [ "$(cat "$lock_f" 2>/dev/null)" == "$$" ]; then
+            rm -f "$lock_f" 2>/dev/null
+        fi
+    done
     
     read -p "Vill du behålla de nedladdade filerna? (j/n): " choice
     if [[ "$choice" =~ ^(n|N|nej|NEJ)$ ]]; then
@@ -193,7 +196,7 @@ cleanup_and_exit() {
     exit 0
 }
 
-echo "Bevakning startad ($today). Logg sparas i: $log_file"
+echo "Bevakning startad. Logg sparas i: $log_file"
 
 while true; do
     if [[ ! -f "$input_file" ]]; then
@@ -209,11 +212,9 @@ while true; do
         exit 1
     fi
 
-    # Standardinställningar vid början av VARJE nytt varv genom listan
     current_overwrite_mode="--no-overwrites"
     current_dirkeep_active="no"
 
-    # Vi läser filen via kanal 3
     while IFS= read -r raw_line <&3 || [[ -n "$raw_line" ]]; do
         clean_line=$(echo "$raw_line" | sed 's/#.*//')
         clean_line=$(echo "$clean_line" | tr -d '\r\n\t')
@@ -221,12 +222,12 @@ while true; do
         
         [[ -z "$item" ]] && continue
 
-        # 1. Hoppa över clean() i loopen (sköts separat vid start via grep)
-        if [[ "$item" == clean\(* || "$item" == Clean\(* ]]; then
+        # NYTT: Hoppa över initclean() i loopen (sköts vid start) med skiftlägesstöd
+        if [[ "$item" == initclean\(* || "$item" == InitClean\(* || "$item" == initClean\(* || "$item" == INITCLEAN\(* ]]; then
             continue
         fi
 
-        # 2. SKOTTSÄKER DYNAMISK OVERWRITE
+        # SKOTTSÄKER DYNAMISK OVERWRITE
         if [[ "$item" == overwrite\(* || "$item" == Overwrite\(* ]]; then
             if [[ "$item" == *"yes"* ]]; then
                 current_overwrite_mode="--force-overwrites"
@@ -296,44 +297,56 @@ while true; do
             url="twitch.tv{item}"
         fi
 
+        # NYTT: Skapa det säkra namnet på lock-filen (UTAN datum)
+        safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
+        lock_file="$temp_dir/${safe_name}.lock"
+
         # 5. DYNAMISK MAPP-BEVAKNING (dirkeep - FIXAD OCH FÖNSTERSÄKRAD)
         if [[ "$current_dirkeep_active" == "yes" ]]; then
             check_folder="$custom_folder"
             if [[ -z "$check_folder" ]]; then
                 check_folder="${url##*/}"
             fi
-            
-            # Vi bygger namnet på lock-filen helt korrekt
-            check_safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
-            check_lock_file="$temp_dir/${today}-${check_safe_name}.lock"
 
-            if [[ -f "$check_lock_file" ]]; then
-                echo "--- Mappen '$check_folder' hanteras just nu av ett annat fönster. Hoppar över! ---"
-                continue
-            elif [[ -d "$base_save_dir/$check_folder" ]] && [ "$(find "$base_save_dir/$check_folder" -maxdepth 1 -type f | wc -l)" -gt 0 ]; then
-                echo "--- Mappen '$check_folder' finns redan och har innehåll. Hoppar över blixtsnabbt! ---"
-                continue
-            fi
-        fi
-
-        safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
-        lock_file="$temp_dir/${today}-${safe_name}.lock"
-        
+        # Kolla om en annan LEVANDE terminal har låst filen
         if [[ -f "$lock_file" ]]; then
-            echo "--- $url körs redan idag i ett annat fönster. Hoppar över. ---"
-            continue
+            running_pid=$(cat "$lock_file" 2>/dev/null)
+        if [[ -n "$running_pid" ]] && kill -0 "$running_pid" 2>/dev/null; then
+            echo "--- Mappen '$check_folder' hanteras just nu av ett annat fönster (PID: $running_pid). Hoppar över! ---"
+        continue
         fi
+    fi
 
-        echo "--- Kollar: $url ---"
-        touch "$lock_file"
-        start_time=$(date "+%Y-%m-%d %H:%M:%S")
-        
-        if [[ -n "$custom_folder" ]]; then
-            output_template="$base_save_dir/${custom_folder}/%(title)s - %(upload_date)s.%(ext)s"
-            echo "-> Sparas i egen vald mapp: $custom_folder"
-        else
-            output_template="$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s"
+        if [[ -d "$base_save_dir/$check_folder" ]] && [ "$(find "$base_save_dir/$check_folder" -maxdepth 1 -type f | wc -l)" -gt 0 ]; then
+            echo "--- Mappen '$check_folder' finns redan och har innehåll. Hoppar över blixtsnabbt! ---"
+        continue
         fi
+    fi
+
+        # NYTT: SJÄLVLÄKANDE OCH KROCKSÄKER LÅSKONTROLL (Kanalerna krockar ALDRIG mer!)
+        if [[ -f "$lock_file" ]]; then
+            running_pid=$(cat "$lock_file" 2>/dev/null)
+        # kill -0 kollar om processen (terminalfönstret) fortfarande lever i Linux
+        if [[ -n "$running_pid" ]] && kill -0 "$running_pid" 2>/dev/null; then
+            echo "--- $url körs just nu i ett annat fönster (PID: $running_pid). Hoppar över. ---"
+        continue
+        else
+            echo "--- Hittade en gammal död låsfil för $url. Rensar och tar över! ---"
+            rm -f "$lock_file" 2>/dev/null
+        fi
+    fi
+
+echo "--- Kollar: $url ---"
+# Skriv in den här terminalens unika ID ($$) i låsfilen
+echo "$$" > "$lock_file"
+start_time=$(date "+%Y-%m-%d %H:%M:%S")
+
+    if [[ -n "$custom_folder" ]]; then
+        output_template="$base_save_dir/${custom_folder}/%(title)s - %(upload_date)s.%(ext)s"
+    echo "-> Sparas i egen vald mapp: $custom_folder"
+    else
+        output_template="$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s"
+    fi
 
         # Kör yt-dlp med det för stunden gällande overwrite-läget
         yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
