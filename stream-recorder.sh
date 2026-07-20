@@ -141,7 +141,7 @@ fi
 # Skapa huvudmappen for videofiler
 mkdir -p "$base_save_dir"
 
-# --- OPTIMERAD OCH SÄKRAD STÄDFUNKTION (Sida 3-5 i PDF) ---
+# --- 100% FÖNSTERSÄKRAD STÄDFUNKTION (STRUNTAR I STORA/SMÅ BOKSTÄVER) ---
 run_folder_cleanup() {
     echo "Rensar tomma mappar men behåller dina inspelningar..."
     find "$base_save_dir" -mindepth 1 -type d -empty -delete
@@ -153,7 +153,8 @@ run_folder_cleanup() {
         is_active="no"
         for l_file in $lock_match; do
             l_name=$(basename "$l_file" .lock)
-            if [[ "$l_name" == *"$parent_dir"* ]]; then
+            # KORRIGERING: [,,] gör om båda namnen till små bokstäver under jämförelsen
+            if [[ "${l_name,,}" == *"${parent_dir,,}"* ]]; then
                 r_pid=$(cat "$l_file" 2>/dev/null)
                 if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
                     is_active="yes"
@@ -172,7 +173,8 @@ run_folder_cleanup() {
         is_active="no"
         for l_file in $lock_match; do
             l_name=$(basename "$l_file" .lock)
-            if [[ "$l_name" == *"$parent_dir"* ]]; then
+            # KORRIGERING: [,,] gör om till små bokstäver för skiftlägesoberoende matchning
+            if [[ "${l_name,,}" == *"${parent_dir,,}"* ]]; then
                 r_pid=$(cat "$l_file" 2>/dev/null)
                 if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
                     is_active="yes"
@@ -201,7 +203,8 @@ run_folder_cleanup() {
         is_active="no"
         for l_file in $lock_match; do
             l_name=$(basename "$l_file" .lock)
-            if [[ "$l_name" == *"$dir_name"* ]]; then
+            # KORRIGERING: [,,] skyddar även färdiga .mp4-filer från att flyttas under pågående inspelning
+            if [[ "${l_name,,}" == *"${dir_name,,}"* ]]; then
                 r_pid=$(cat "$l_file" 2>/dev/null)
                 if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
                     is_active="yes"
@@ -214,8 +217,11 @@ run_folder_cleanup() {
             continue
         fi
         
-        # NYTT: Kolla om filen är extremt liten (t.ex. under 500kb skräp från en offline-kanal)
-        # Istället för att skapa en "-mindre-filer"-mapp raderar vi bara den lilla tomma skräpfilen direkt
+        if [[ ! -s "$video_file" ]]; then
+            rm -f "$video_file" 2>/dev/null
+            continue
+        fi
+        
         file_size_bytes=$(stat -c%s "$video_file" 2>/dev/null)
         if [[ -n "$file_size_bytes" ]] && [ "$file_size_bytes" -lt 512000 ]; then
             rm -f "$video_file" 2>/dev/null
