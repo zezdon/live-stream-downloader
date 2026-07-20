@@ -28,7 +28,7 @@ if [[ ! -f "$sleep_config_file" ]]; then
     fi
     sleep_choice=$(echo "$sleep_choice" | tr -dc '0-9')
     echo "$sleep_choice" > "$sleep_config_file"
-    echo "Inställning sparad: Pausar mellan 2 and ${sleep_choice} sekunder."
+    echo "Inställning sparad: Pausar mellan 2 och ${sleep_choice} sekunder."
 fi
 max_sleep=$(cat "$sleep_config_file" 2>/dev/null)
 
@@ -141,18 +141,54 @@ fi
 # Skapa huvudmappen for videofiler
 mkdir -p "$base_save_dir"
 
-# --- NY ENHETLIG STÄDFUNKTION (Kan köras av clear(folder) eller vid exit) ---
+# --- KORRIGERAD STÄDFUNKTION: HOPPAR ÖVER AKTIVA INSPELNINGAR ---
 run_folder_cleanup() {
     echo "Rensar tomma mappar men behåller dina inspelningar..."
     find "$base_save_dir" -mindepth 1 -type d -empty -delete
 
     echo "Letar efter avbrutna inspelningar (.part-filer)..."
-    find "$base_save_dir" -type f -name "*.mp4.part" -size -"$min_file_size" -delete
+    # Radera skräp-partfiler, men ENDAST om mappen inte är aktivt låst av en levande process
+    find "$base_save_dir" -type f -name "*.mp4.part" -size -"$min_file_size" | while read -r junk_part; do
+        parent_dir=$(basename "$(dirname "$junk_part")")
+        # Kolla om det finns en aktiv låsfil för denna mapp/streamer
+        lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
+        is_active="no"
+        for l_file in $lock_match; do
+            l_name=$(basename "$l_file" .lock)
+            if [[ "$l_name" == *"$parent_dir"* ]]; then
+                r_pid=$(cat "$l_file" 2>/dev/null)
+                if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+                    is_active="yes"
+                    break
+                fi
+            fi
+        done
+        if [[ "$is_active" == "no" ]]; then
+            rm -f "$junk_part" 2>/dev/null
+        fi
+    done
     
+    # Döp om färdiga part-filer till -avbruten.mp4 (hoppa över aktiva låsta mappar)
     find "$base_save_dir" -type f -name "*.mp4.part" | while read -r part_file; do
-        new_file="${part_file%.mp4.part}-avbruten.mp4"
-        mv "$part_file" "$new_file"
-        echo "Fixade fil: $(basename "$part_file") -> $(basename "$new_file")"
+        parent_dir=$(basename "$(dirname "$part_file")")
+        lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
+        is_active="no"
+        for l_file in $lock_match; do
+            l_name=$(basename "$l_file" .lock)
+            if [[ "$l_name" == *"$parent_dir"* ]]; then
+                r_pid=$(cat "$l_file" 2>/dev/null)
+                if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+                    is_active="yes"
+                    break
+                fi
+            fi
+        done
+        
+        if [[ "$is_active" == "no" ]]; then
+            new_file="${part_file%.mp4.part}-avbruten.mp4"
+            mv "$part_file" "$new_file"
+            echo "Fixade fil: $(basename "$part_file") -> $(basename "$new_file")"
+        fi
     done
 
     echo "Sorterar mindre videofiler (mellan ${min_size_num}kb och 100000kb)..."
@@ -161,6 +197,24 @@ run_folder_cleanup() {
         dir_name=$(basename "$current_dir")
         
         if [[ "$dir_name" == *"-mindre-filer" ]]; then
+            continue
+        fi
+        
+        # SÄKERHETSSPÄRR: Hoppa över om ett annat fönster spelar in i den här mappen just nu
+        lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
+        is_active="no"
+        for l_file in $lock_match; do
+            l_name=$(basename "$l_file" .lock)
+            if [[ "$l_name" == *"$dir_name"* ]]; then
+                r_pid=$(cat "$l_file" 2>/dev/null)
+                if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+                    is_active="yes"
+                    break
+                fi
+            fi
+        done
+        
+        if [[ "$is_active" == "yes" ]]; then
             continue
         fi
         
@@ -174,7 +228,6 @@ run_folder_cleanup() {
     find "$base_save_dir" -mindepth 1 -type d -empty -delete
     echo "Mapp- och filhanteringen är klar."
 }
-# ---------------------------------------------------------------------------
 
 cleanup_and_exit() {
     echo -e "\n"
@@ -247,11 +300,11 @@ while true; do
                 current_overwrite_mode="--force-overwrites"
                 current_dirkeep_active="no"
                 echo "-> Ändrar läge: Överskrivning AKTIVERAD (overwrite=yes)"
-            elif [[ "$item" == *"dirkeep"* ]]; then
+            elif [[ "$item" == "dirkeep"* ]]; then
                 current_overwrite_mode="--no-overwrites"
                 current_dirkeep_active="yes"
                 echo "-> Ändrar läge: Mapp-bevakning AKTIVERAD (overwrite=dirkeep)"
-            elif [[ "$item" == *"no"* || "$item" == *"keep"* ]]; then
+            elif [[ "$item" == "no" || "$item" == "keep"* ]]; then
                 current_overwrite_mode="--no-overwrites"
                 current_dirkeep_active="no"
                 echo "-> Ändrar läge: Överskrivning INAKTIVERAD (overwrite=no/keep)"
@@ -312,8 +365,8 @@ while true; do
     fi
 
     # NYTT: Skapa det säkra namnet på lock-filen (UTAN datum)
-    safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
-    lock_file="$temp_dir/${safe_name}.lock"
+    #safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
+    #lock_file="$temp_dir/${safe_name}.lock"
 
     # 5. DYNAMISK MAPP-BEVAKNING (dirkeep - FIXAD OCH FÖNSTERSÄKRAD)
     if [[ "$current_dirkeep_active" == "yes" ]]; then
@@ -369,15 +422,16 @@ while true; do
     status=$?
     rm -f "$lock_file"
 
+    # KORRIGERING: Vi frigör kanal 3 (<&- ) tillfälligt för att spara loggen säkert vid looping
     if [ $status -eq 0 ]; then
       end_time=$(date "+%Y-%m-%d %H:%M:%S")
       log_entry="[$start_time till $end_time] $url ONLINE"
 
-      if [[ "$url" == *"twitch.tv" ]]; then
+      if [[ "$url" == "twitch.tv" ]]; then
         title=$(yt-dlp --get-title --no-check-certificate "$url" 2>/dev/null)
         log_entry="$log_entry - Titel: $title"
       fi
-      echo "$log_entry" >> "$log_file"
+      echo "$log_entry" >> "$log_file" 3<&-
     else
       wait_time=$(( ( RANDOM % sleep_interval ) + 2 ))
       echo "Offline/Klar: Väntar $wait_time sekunder..."
