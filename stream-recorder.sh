@@ -141,7 +141,7 @@ fi
 # Skapa huvudmappen for videofiler
 mkdir -p "$base_save_dir"
 
-# --- ENHETLIG STÄDFUNKTION ---
+# --- OPTIMERAD OCH SÄKRAD STÄDFUNKTION (Sida 3-5 i PDF) ---
 run_folder_cleanup() {
     echo "Rensar tomma mappar men behåller dina inspelningar..."
     find "$base_save_dir" -mindepth 1 -type d -empty -delete
@@ -211,6 +211,15 @@ run_folder_cleanup() {
         done
         
         if [[ "$is_active" == "yes" ]]; then
+            continue
+        fi
+        
+        # NYTT: Kolla om filen är extremt liten (t.ex. under 500kb skräp från en offline-kanal)
+        # Istället för att skapa en "-mindre-filer"-mapp raderar vi bara den lilla tomma skräpfilen direkt
+        file_size_bytes=$(stat -c%s "$video_file" 2>/dev/null)
+        if [[ -n "$file_size_bytes" ]] && [ "$file_size_bytes" -lt 512000 ]; then
+            rm -f "$video_file" 2>/dev/null
+            echo "Tyst rensning: Tog bort tom skräpfil från offline-kanal: $(basename "$video_file")"
             continue
         fi
         
@@ -351,12 +360,13 @@ while true; do
     item="${item#/}"
     item="${item%/}"
 
+    # --- KORRIGERAT URL-BLOCK (Sida 8 i din PDF) ---
     if [[ "$item" == http://* || "$item" == https://* ]]; then
         url="$item"
     elif [[ "$item" == *twitch.tv* ]]; then
         url="https://${item}"
     else
-        url="https://twitch.tv{item}"  # KORRIGERAD RAD 141
+        url="https://twitch.tv/${item}"
     fi
 
     # NYTT: Skapa det säkra namnet på lock-filen (UTAN datum)
@@ -436,7 +446,7 @@ while true; do
         log_entry="$log_entry - Titel: $title"
       fi      
       # Vi skriver till loggfilen via ett rent under-skal för att garantera att loopen inte dör
-      (echo "$log_entry" >> "$log_file") 2>/dev/null
+      (echo "$log_entry" >> "$log_file") 2>/dev/null      
     else
       wait_time=$(( ( RANDOM % sleep_interval ) + 2 ))
       echo "Offline/Klar: Väntar $wait_time sekunder..."
