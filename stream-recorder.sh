@@ -76,7 +76,7 @@ if [[ -f "$input_file" ]]; then
     fi
 fi
 
-# Hantering av initclean(yes/no)
+# Hantering av initclean(yes/no) - Rensar loggfilen
 if [[ "$auto_clean" == "yes" ]]; then
     if [[ -f "$log_file" ]]; then
         rm -f "$log_file" 2>/dev/null
@@ -141,16 +141,14 @@ fi
 # Skapa huvudmappen for videofiler
 mkdir -p "$base_save_dir"
 
-# --- KORRIGERAD STÄDFUNKTION: HOPPAR ÖVER AKTIVA INSPELNINGAR ---
+# --- ENHETLIG STÄDFUNKTION ---
 run_folder_cleanup() {
     echo "Rensar tomma mappar men behåller dina inspelningar..."
     find "$base_save_dir" -mindepth 1 -type d -empty -delete
 
     echo "Letar efter avbrutna inspelningar (.part-filer)..."
-    # Radera skräp-partfiler, men ENDAST om mappen inte är aktivt låst av en levande process
     find "$base_save_dir" -type f -name "*.mp4.part" -size -"$min_file_size" | while read -r junk_part; do
         parent_dir=$(basename "$(dirname "$junk_part")")
-        # Kolla om det finns en aktiv låsfil för denna mapp/streamer
         lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
         is_active="no"
         for l_file in $lock_match; do
@@ -168,7 +166,6 @@ run_folder_cleanup() {
         fi
     done
     
-    # Döp om färdiga part-filer till -avbruten.mp4 (hoppa över aktiva låsta mappar)
     find "$base_save_dir" -type f -name "*.mp4.part" | while read -r part_file; do
         parent_dir=$(basename "$(dirname "$part_file")")
         lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
@@ -200,7 +197,6 @@ run_folder_cleanup() {
             continue
         fi
         
-        # SÄKERHETSSPÄRR: Hoppa över om ett annat fönster spelar in i den här mappen just nu
         lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
         is_active="no"
         for l_file in $lock_match; do
@@ -254,7 +250,6 @@ cleanup_and_exit() {
     fi
     exit 0
 }
-
 echo "Bevakning startad. Logg sparas i: $log_file"
 
 while true; do
@@ -300,11 +295,11 @@ while true; do
                 current_overwrite_mode="--force-overwrites"
                 current_dirkeep_active="no"
                 echo "-> Ändrar läge: Överskrivning AKTIVERAD (overwrite=yes)"
-            elif [[ "$item" == "dirkeep"* ]]; then
+            elif [[ "$item" == *"dirkeep"* ]]; then
                 current_overwrite_mode="--no-overwrites"
                 current_dirkeep_active="yes"
                 echo "-> Ändrar läge: Mapp-bevakning AKTIVERAD (overwrite=dirkeep)"
-            elif [[ "$item" == "no" || "$item" == "keep"* ]]; then
+            elif [[ "$item" == *"no"* || "$item" == *"keep"* ]]; then
                 current_overwrite_mode="--no-overwrites"
                 current_dirkeep_active="no"
                 echo "-> Ändrar läge: Överskrivning INAKTIVERAD (overwrite=no/keep)"
@@ -357,16 +352,16 @@ while true; do
     item="${item%/}"
 
     if [[ "$item" == http://* || "$item" == https://* ]]; then
-      url="$item"
-    elif [[ "$item" == twitch.tv ]]; then
-      url="https://${item}"
+        url="$item"
+    elif [[ "$item" == *twitch.tv* ]]; then
+        url="https://${item}"
     else
-      url="twitch.tv{item}"
+        url="https://twitch.tv{item}"  # KORRIGERAD RAD 141
     fi
 
     # NYTT: Skapa det säkra namnet på lock-filen (UTAN datum)
-    #safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
-    #lock_file="$temp_dir/${safe_name}.lock"
+    safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
+    lock_file="$temp_dir/${safe_name}.lock"
 
     # 5. DYNAMISK MAPP-BEVAKNING (dirkeep - FIXAD OCH FÖNSTERSÄKRAD)
     if [[ "$current_dirkeep_active" == "yes" ]]; then
@@ -422,16 +417,26 @@ while true; do
     status=$?
     rm -f "$lock_file"
 
-    # KORRIGERING: Vi frigör kanal 3 (<&- ) tillfälligt för att spara loggen säkert vid looping
+    # KORRIGERING: Helt omarbetad och isolerad loggning. Krockar aldrig med kanal 3!
+    # KORRIGERING: Fixat stjärntecknet (twitch.tv) så att loggningen hoppar igång direkt!
+    # --- KORRIGERAT LOGG-BLOCK (Sida 9 i din PDF) ---
     if [ $status -eq 0 ]; then
       end_time=$(date "+%Y-%m-%d %H:%M:%S")
       log_entry="[$start_time till $end_time] $url ONLINE"
 
-      if [[ "$url" == "twitch.tv" ]]; then
+      # Kontrollera om det är Twitch (Fixat stjärntecken)    
+      if [[ "$url" == *"twitch.tv"* ]]; then
         title=$(yt-dlp --get-title --no-check-certificate "$url" 2>/dev/null)
         log_entry="$log_entry - Titel: $title"
-      fi
-      echo "$log_entry" >> "$log_file" 3<&-
+      # NYTT: Hantering för YouTube (Hämtar titeln utan att hänga sig på livesändningar)
+      elif [[ "$url" == *"youtube.com"* || "$url" == *"youtu.be"* ]]; then
+        title=$(yt-dlp --get-title --no-check-certificate --match-filter "!is_live" "$url" 2>/dev/null)
+        # Om det var en livesändning returnerar kommandot inget, sätt då en standardtext
+        [[ -z "$title" ]] && title="YouTube Live Stream"
+        log_entry="$log_entry - Titel: $title"
+      fi      
+      # Vi skriver till loggfilen via ett rent under-skal för att garantera att loopen inte dör
+      (echo "$log_entry" >> "$log_file") 2>/dev/null
     else
       wait_time=$(( ( RANDOM % sleep_interval ) + 2 ))
       echo "Offline/Klar: Väntar $wait_time sekunder..."
