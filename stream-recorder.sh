@@ -300,8 +300,8 @@ while true; do
         
         [[ -z "$item" ]] && continue
 
-        # Hoppa över initclean() i loopen (sköts vid start)
-        if [[ "$item" == initclean\(* || "$item" == InitClean\(* || "$item" == initClean\(* || "$item" == INITCLEAN\(* ]]; then
+        # Hoppa över initclean() och initDebug() i loopen (sköts vid start)
+        if [[ "$item" == initclean\(* || "$item" == InitClean\(* || "$item" == initClean\(* || "$item" == INITCLEAN\(* || "$item" == initdebug\(* || "$item" == initDebug\(* || "$item" == InitDebug\(* || "$item" == INITDEBUG\(* ]]; then
             continue
         fi
 
