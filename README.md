@@ -90,3 +90,47 @@ overwrite(no)
 url(https://youtube.com, "Boten Anna")
 delay(5)
 ```
+## Automatisk städning: `clear(folder)`
+
+När du kör skriptet i bakgrunden (till exempel via Crontab eller Systemctl) finns det ingen användare på plats som kan trycka på 'q' för att starta städningen. Då använder du det dynamiska kommandot `clear(folder)` direkt i din textfil för att schemalägga städningen automatiskt.
+
+När skriptet når raden `clear(folder)` körs följande procedur helt automatiskt:
+1. **Rensar tomma mappar:** Alla undermappar i ditt videoarkiv som har skapats men blivit tomma raderas.
+2. **Hanterar avbrutna filer:** Tar automatiskt bort `.part`-filändelsen på inspelningar som avbrutits och markerar dem med `-avbruten.mp4` i filnamnet så att de blir vanliga spelbara videofiler.
+3. **Sorterar mindre videofiler:** Hittar färdiga videofiler som är mindre än 100 MB (ofta korta testklipp eller skräpfiler från streams som snabbt gått ner) och flyttar dem till en separat undermapp märkt med `-mindre-filer` i slutet.
+
+### Hantering av specialtecken i mappnamn
+Skriptet är fullt fönstersäkrat och stöder att du använder specialtecken som bindestreck (`-`), understreck (`_`) eller mellanslag i dina skräddarsydda mappnamn, utan att terminalerna krockar eller att filerna sorteras fel.
+
+*Exempel:*
+```text
+# Exempel på användning av specialtecken och automatisk städning
+initclean(no)
+overwrite(no)
+
+# Skapa mappar med bindestreck och understreck
+url(https://twitch.tv, "b-e-n-n-y")
+delay(7)
+url(https://twitch.tv, "j_l_c_s_2")
+delay(7)
+
+# Starta automatisk rensning och sortering i slutet av loopen
+clear(folder)
+```
+## Kontrollera terminalutskrifter: `initDebug()`
+
+När skriptet kontrollerar kanaler som är offline, spottar `yt-dlp` och systemet ofta ur sig en hel del röd feltext i terminalen (så kallad *Standard Error*). För att hålla din skärm och dina loggfiler rena och städade kan du styra om denna feltext ska visas eller döljas.
+
+Du styr detta med kommandot `initDebug()` högst upp i din textfil:
+* **`initDebug(no)` (Standard / Default):** Gömmer all röd feltext och ovidkommande systemmeddelanden. Terminalen blir tyst, ren och lättläst. Detta läge används automatiskt även om du helt utelämnar kommandot från textfilen.
+* **`initDebug(yes)`:** Slår på debug-läget. All röd feltext visas på skärmen, vilket är perfekt om du behöver felsöka en anslutning eller se varför en specifik sajt inte vill ladda ner.
+
+*Exempel:*
+```text
+# Håll skärmen ren från röd feltext (Default)
+initDebug(no)
+initclean(no)
+overwrite(dirkeep)
+
+# Dina kanaler...
+```

@@ -50,15 +50,24 @@ if [[ -n "$key" ]]; then
 fi
 
 # 3. För-skanning av textfilen efter initclean och overwrite
+# --- UPPDATERING SIDA 1 ---
 auto_clean=""
+debug_output="/dev/null" # Standard: Gömmer feltext
 overwrite_mode="--no-overwrites"
 dirkeep_active="no"
 
 if [[ -f "$input_file" ]]; then
+    # Skanna efter initclean
     if grep -iq "^[[:space:]]*initclean(yes)" "$input_file"; then
         auto_clean="yes"
     elif grep -iq "^[[:space:]]*initclean(no)" "$input_file"; then
         auto_clean="no"
+    fi
+
+    # NYTT: Skanna efter initDebug vid start
+    if grep -iq "^[[:space:]]*initdebug(yes)" "$input_file"; then
+        debug_output="/dev/stderr"
+        echo "System: Debug-läge AKTIVERAT. Röd feltext visas."
     fi
 
     if grep -iq "^[[:space:]]*overwrite(yes)" "$input_file"; then
@@ -376,8 +385,10 @@ while true; do
     fi
 
     # NYTT: Skapa det säkra namnet på lock-filen (UTAN datum)
-    safe_name=$(echo "$url" | tr -dc '[:alnum:]-')
-    lock_file="$temp_dir/${safe_name}.lock"
+        # --- UPPDATERING SIDA 7 ---
+        # Vi lägger till _ inuti kontrollen för att stödja understreck
+        safe_name=$(echo "$url" | tr -dc '[:alnum:]_-')
+        lock_file="$temp_dir/${safe_name}.lock"
 
     # 5. DYNAMISK MAPP-BEVAKNING (dirkeep - FIXAD OCH FÖNSTERSÄKRAD)
     if [[ "$current_dirkeep_active" == "yes" ]]; then
@@ -426,9 +437,11 @@ while true; do
       output_template="$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s"
     fi
 
-    # Kör yt-dlp med det för stunden gällande overwrite-läget
-    yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
-      -o "$output_template" "$url" </dev/null
+    # # Kör yt-dlp med det för stunden gällande overwrite-läget
+        # --- UPPDATERING SIDA 8 ---
+        # Kör yt-dlp och skicka feltexten till vår dynamiska debug-variabel
+        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
+            -o "$output_template" "$url" </dev/null 2>$debug_output
 
     status=$?
     rm -f "$lock_file"
@@ -462,6 +475,8 @@ while true; do
     fi
   done 3< "$input_file"
 
-  read -t 5 -n 1 key < /dev/tty
-  [[ $key == "q" ]] && cleanup_and_exit
+  #read -t 5 -n 1 key < /dev/tty
+  #[[ $key == "q" ]] && cleanup_and_exit
+    # sleep blockerar tangentbordskrockar helt mellan fönstren!
+    sleep 5  
 done
