@@ -399,7 +399,7 @@ while true; do
 
       # Kolla om en annan LEVANDE terminal har låst filen
       if [[ -f "$lock_file" ]]; then
-        running_pid=$(cat "$lock_file" 2>/dev/null)
+        running_pid=$(cat "$lock_file" | sed -n '1p' 2>/dev/null)
         if [[ -n "$running_pid" ]] && kill -0 "$running_pid" 2>/dev/null; then
           echo "--- Mappen '$check_folder' hanteras just nu av ett annat fönster (PID: $running_pid). Hoppar över! ---"
           continue
@@ -414,7 +414,7 @@ while true; do
 
     # NYTT: SJÄLVLÄKANDE OCH KROCKSÄKER LÅSKONTROLL (Kanalerna krockar ALDRIG mer!)
     if [[ -f "$lock_file" ]]; then
-      running_pid=$(cat "$lock_file" 2>/dev/null)
+      running_pid=$(cat "$lock_file" | sed -n '1p' 2>/dev/null)
       # kill -0 kollar om processen (terminalfönstret) fortfarande lever i Linux
       if [[ -n "$running_pid" ]] && kill -0 "$running_pid" 2>/dev/null; then
         echo "--- $url körs just nu i ett annat fönster (PID: $running_pid). Hoppar över. ---"
