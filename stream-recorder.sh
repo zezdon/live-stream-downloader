@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# --- KONFIGURATION ---
+#--- KONFIGURATION ---
+script_version="v0.3.3" # NYTT: Versionshanterare
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -18,6 +19,11 @@ today=$(date +%Y%m%d)
 # Skapa mappar om de inte existerar
 mkdir -p "$temp_dir"
 mkdir -p "$script_dir/log"
+
+# NYTT: Skriv ut versionen direkt vid start
+echo "=========================================="
+echo " Starting Stream Recorder $script_version"
+echo "=========================================="
 
 # 1. Hantera inställning för slumpmässig paus
 if [[ ! -f "$sleep_config_file" ]]; then
@@ -50,7 +56,6 @@ if [[ -n "$key" ]]; then
 fi
 
 # 3. För-skanning av textfilen efter initclean och overwrite
-# --- UPPDATERING SIDA 1 ---
 auto_clean=""
 debug_output="/dev/null" # Standard: Gömmer feltext
 overwrite_mode="--no-overwrites"
@@ -151,6 +156,7 @@ fi
 mkdir -p "$base_save_dir"
 
 # --- 100% FÖNSTERSÄKRAD STÄDFUNKTION (STRUNTAR I STORA/SMÅ BOKSTÄVER) ---
+# --- 100% STRÄNGSÄKRAD OCH FÖNSTERSÄKRAD STÄDFUNKTION ---
 run_folder_cleanup() {
     echo "Rensar tomma mappar men behåller dina inspelningar..."
     find "$base_save_dir" -mindepth 1 -type d -empty -delete
@@ -160,12 +166,13 @@ run_folder_cleanup() {
         parent_dir=$(basename "$(dirname "$junk_part")")
         lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
         is_active="no"
+        
         for l_file in $lock_match; do
-            l_name=$(basename "$l_file" .lock)
-            # KORRIGERING: [,,] gör om båda namnen till små bokstäver under jämförelsen
-            if [[ "${l_name,,}" == *"${parent_dir,,}"* ]]; then
-                r_pid=$(cat "$l_file" 2>/dev/null)
-                if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+            r_pid=$(sed -n '1p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            l_folder=$(sed -n '2p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            
+            if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+                if [[ "${l_folder,,}" == "${parent_dir,,}" ]]; then
                     is_active="yes"
                     break
                 fi
@@ -180,12 +187,13 @@ run_folder_cleanup() {
         parent_dir=$(basename "$(dirname "$part_file")")
         lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
         is_active="no"
+        
         for l_file in $lock_match; do
-            l_name=$(basename "$l_file" .lock)
-            # KORRIGERING: [,,] gör om till små bokstäver för skiftlägesoberoende matchning
-            if [[ "${l_name,,}" == *"${parent_dir,,}"* ]]; then
-                r_pid=$(cat "$l_file" 2>/dev/null)
-                if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+            r_pid=$(sed -n '1p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            l_folder=$(sed -n '2p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            
+            if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+                if [[ "${l_folder,,}" == "${parent_dir,,}" ]]; then
                     is_active="yes"
                     break
                 fi
@@ -200,7 +208,8 @@ run_folder_cleanup() {
     done
 
     echo "Sorterar mindre videofiler (mellan ${min_size_num}kb och 100000kb)..."
-    find "$base_save_dir" -type f -name "*.mp4" -size +"${min_size_num}k" -size -100000k | while read -r video_file; do
+    # REGEX ser till att endast filer som slutar på exakt .mp4 matchas (aldrig .part)
+    find "$base_save_dir" -type f -regextype posix-extended -regex '.*\.mp4$' -size +"${min_size_num}k" -size -100000k | while read -r video_file; do
         current_dir=$(dirname "$video_file")
         dir_name=$(basename "$current_dir")
         
@@ -210,12 +219,13 @@ run_folder_cleanup() {
         
         lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
         is_active="no"
+        
         for l_file in $lock_match; do
-            l_name=$(basename "$l_file" .lock)
-            # KORRIGERING: [,,] skyddar även färdiga .mp4-filer från att flyttas under pågående inspelning
-            if [[ "${l_name,,}" == *"${dir_name,,}"* ]]; then
-                r_pid=$(cat "$l_file" 2>/dev/null)
-                if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+            r_pid=$(sed -n '1p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            l_folder=$(sed -n '2p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            
+            if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+                if [[ "${l_folder,,}" == "${dir_name,,}" ]]; then
                     is_active="yes"
                     break
                 fi
@@ -228,13 +238,6 @@ run_folder_cleanup() {
         
         if [[ ! -s "$video_file" ]]; then
             rm -f "$video_file" 2>/dev/null
-            continue
-        fi
-        
-        file_size_bytes=$(stat -c%s "$video_file" 2>/dev/null)
-        if [[ -n "$file_size_bytes" ]] && [ "$file_size_bytes" -lt 512000 ]; then
-            rm -f "$video_file" 2>/dev/null
-            echo "Tyst rensning: Tog bort tom skräpfil från offline-kanal: $(basename "$video_file")"
             continue
         fi
         
@@ -385,44 +388,38 @@ while true; do
     fi
 
     # NYTT: Skapa det säkra namnet på lock-filen (UTAN datum)
-        # --- UPPDATERING SIDA 7 ---
-        # Vi lägger till _ inuti kontrollen för att stödja understreck
-        safe_name=$(echo "$url" | tr -dc '[:alnum:]_-')
-        lock_file="$temp_dir/${safe_name}.lock"
-
-    # 5. DYNAMISK MAPP-BEVAKNING (dirkeep - FIXAD OCH FÖNSTERSÄKRAD)
+    # Vi lägger till _ inuti kontrollen för att stödja understreck
+    safe_name=$(echo "$url" | tr -dc '[:alnum:]_-')
+    lock_file="$temp_dir/${safe_name}.lock"
+    
+    # --- KORRIGERAT LÅSBLOCK FÖR FÖNSTERMÖTE (Sida 9 i PDF) ---
     if [[ "$current_dirkeep_active" == "yes" ]]; then
-      check_folder="$custom_folder"
-      if [[ -z "$check_folder" ]]; then
-        check_folder="${url##*/}"
-      fi
-
-      # Kolla om en annan LEVANDE terminal har låst filen
-      if [[ -f "$lock_file" ]]; then
-        running_pid=$(cat "$lock_file" | sed -n '1p' 2>/dev/null)
-        if [[ -n "$running_pid" ]] && kill -0 "$running_pid" 2>/dev/null; then
-          echo "--- Mappen '$check_folder' hanteras just nu av ett annat fönster (PID: $running_pid). Hoppar över! ---"
-          continue
+        check_folder="$active_folder_name"
+        if [[ -f "$lock_file" ]]; then
+            running_pid=$(sed -n '1p' "$lock_file" 2>/dev/null | tr -d '\r\n\t ')
+            if [[ -n "$running_pid" ]] && kill -0 "$running_pid" 2>/dev/null; then
+                echo "--- Mappen '$check_folder' hanteras just nu av ett annat fönster (PID: $running_pid). Hoppar över! ---"
+                continue
+            fi
         fi
-      fi
 
-      if [[ -d "$base_save_dir/$check_folder" ]] && [ "$(find "$base_save_dir/$check_folder" -maxdepth 1 -type f | wc -l)" -gt 0 ]; then
-        echo "--- Mappen '$check_folder' finns redan och har innehåll. Hoppar över blixtsnabbt! ---"
-        continue
-      fi
+        # Kolla om en annan LEVANDE terminal har låst filen
+        if [[ -d "$base_save_dir/$check_folder" ]] && [ "$(find "$base_save_dir/$check_folder" -maxdepth 1 -type f | wc -l)" -gt 0 ]; then
+            echo "--- Mappen '$check_folder' finns redan och har innehåll. Hoppar över blixtsnabbt! ---"
+            continue
+        fi
     fi
 
     # NYTT: SJÄLVLÄKANDE OCH KROCKSÄKER LÅSKONTROLL (Kanalerna krockar ALDRIG mer!)
     if [[ -f "$lock_file" ]]; then
-      running_pid=$(cat "$lock_file" | sed -n '1p' 2>/dev/null)
-      # kill -0 kollar om processen (terminalfönstret) fortfarande lever i Linux
-      if [[ -n "$running_pid" ]] && kill -0 "$running_pid" 2>/dev/null; then
-        echo "--- $url körs just nu i ett annat fönster (PID: $running_pid). Hoppar över. ---"
-        continue
-      else
-        echo "--- Hittade en gammal död låsfil för $url. Rensar och tar över! ---"
-        rm -f "$lock_file" 2>/dev/null
-      fi
+        running_pid=$(sed -n '1p' "$lock_file" 2>/dev/null | tr -d '\r\n\t ')
+        if [[ -n "$running_pid" ]] && kill -0 "$running_pid" 2>/dev/null; then
+            echo "--- $url körs just nu i ett annat fönster (PID: $running_pid). Hoppar över. ---"
+            continue
+        else
+            echo "--- Hittade en gammal död låsfil för $url. Rensar och tar över! ---"
+            rm -f "$lock_file" 2>/dev/null
+        fi
     fi
 
     echo "--- Kollar: $url ---"
@@ -437,8 +434,7 @@ while true; do
       output_template="$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s"
     fi
 
-    # # Kör yt-dlp med det för stunden gällande overwrite-läget
-        # --- UPPDATERING SIDA 8 ---
+        # Kör yt-dlp med det för stunden gällande overwrite-läget
         # Kör yt-dlp och skicka feltexten till vår dynamiska debug-variabel
         yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
             -o "$output_template" "$url" </dev/null 2>$debug_output
