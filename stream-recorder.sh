@@ -1,7 +1,7 @@
 #!/bin/bash
 
-#--- KONFIGURATION ---
-script_version="v0.3.4" # NYTT: Versionshanterare
+# --- KONFIGURATION ---
+script_version="v0.3.5" # UPPDATERAD VERSION
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -9,18 +9,25 @@ input_file="$script_dir/${script_base}.txt"
 
 base_save_dir="$HOME/stream_videos"
 log_file="$script_dir/log/stream_history.log"
-config_file="$HOME/.ffmpeg_threads_config"
-size_config_file="$HOME/.file_size_config"
-sleep_config_file="$HOME/.sleep_config"
 temp_dir="/tmp/stream_locks"
 today=$(date +%Y%m%d)
+
+# NYTT: Samlar alla konfigurationsfiler i en egen dold '.settings'-mapp bredvid skriptet
+settings_dir="$script_dir/.settings"
+config_file="$settings_dir/.ffmpeg_threads_config"
+size_config_file="$settings_dir/.file_size_config"
+sleep_config_file="$settings_dir/.sleep_config"
 # ---------------------
 
-# Skapa mappar om de inte existerar
+# Skapa mappar automatiskt om de inte existerar
 mkdir -p "$temp_dir"
 mkdir -p "$script_dir/log"
+mkdir -p "$settings_dir" # NYTT: Skapar mappen .settings
 
-# NYTT: Skriv ut versionen direkt vid start
+# NYTT: Skapar eller uppdaterar VERSION.txt automatiskt med den aktuella versionen
+echo "$script_version" > "$script_dir/VERSION.txt"
+
+# Skriv ut versionen direkt vid start
 echo "=========================================="
 echo " Starting Stream Recorder $script_version"
 echo "=========================================="
@@ -57,7 +64,7 @@ fi
 
 # 3. För-skanning av textfilen efter initclean och overwrite
 auto_clean=""
-debug_output="/dev/null" # Standard: Gömmer feltext
+debug_output="/dev/null" # Standard (default): Gömmer feltext
 overwrite_mode="--no-overwrites"
 dirkeep_active="no"
 
@@ -69,12 +76,13 @@ if [[ -f "$input_file" ]]; then
         auto_clean="no"
     fi
 
-    # NYTT: Skanna efter initDebug vid start
+    # Skanna efter initDebug vid start
     if grep -iq "^[[:space:]]*initdebug(yes)" "$input_file"; then
         debug_output="/dev/stderr"
         echo "System: Debug-läge AKTIVERAT. Röd feltext visas."
     fi
 
+    # Skanna efter overwrite
     if grep -iq "^[[:space:]]*overwrite(yes)" "$input_file"; then
         overwrite_mode="--force-overwrites"
         echo "System: Överskrivning AKTIVERAD (overwrite=yes)."
@@ -155,7 +163,7 @@ fi
 # Skapa huvudmappen for videofiler
 mkdir -p "$base_save_dir"
 
-# GAMMAL IFRÅN v029 FÖNSTERSÄKRAD STÄDFUNKTION (STRUNTAR I STORA/SMÅ BOKSTÄVER) ---
+# --- GAMMAL FÖNSTERSÄKRAD STÄDFUNKTION (Baserad på din stabila v0.3.3) ---
 run_folder_cleanup() {
     echo "Rensar tomma mappar men behåller dina inspelningar..."
     find "$base_save_dir" -mindepth 1 -type d -empty -delete
@@ -167,7 +175,6 @@ run_folder_cleanup() {
         is_active="no"
         for l_file in $lock_match; do
             l_name=$(basename "$l_file" .lock)
-            # KORRIGERING: [,,] gör om båda namnen till små bokstäver under jämförelsen
             if [[ "${l_name,,}" == *"${parent_dir,,}"* ]]; then
                 r_pid=$(cat "$l_file" 2>/dev/null)
                 if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
@@ -187,7 +194,6 @@ run_folder_cleanup() {
         is_active="no"
         for l_file in $lock_match; do
             l_name=$(basename "$l_file" .lock)
-            # KORRIGERING: [,,] gör om till små bokstäver för skiftlägesoberoende matchning
             if [[ "${l_name,,}" == *"${parent_dir,,}"* ]]; then
                 r_pid=$(cat "$l_file" 2>/dev/null)
                 if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
@@ -217,7 +223,6 @@ run_folder_cleanup() {
         is_active="no"
         for l_file in $lock_match; do
             l_name=$(basename "$l_file" .lock)
-            # KORRIGERING: [,,] skyddar även färdiga .mp4-filer från att flyttas under pågående inspelning
             if [[ "${l_name,,}" == *"${dir_name,,}"* ]]; then
                 r_pid=$(cat "$l_file" 2>/dev/null)
                 if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
@@ -226,7 +231,7 @@ run_folder_cleanup() {
                 fi
             fi
         done
-
+        
         if [[ "$is_active" == "yes" ]]; then
             continue
         fi
@@ -235,14 +240,14 @@ run_folder_cleanup() {
             rm -f "$video_file" 2>/dev/null
             continue
         fi
-
+        
         file_size_bytes=$(stat -c%s "$video_file" 2>/dev/null)
         if [[ -n "$file_size_bytes" ]] && [ "$file_size_bytes" -lt 512000 ]; then
             rm -f "$video_file" 2>/dev/null
             echo "Tyst rensning: Tog bort tom skräpfil från offline-kanal: $(basename "$video_file")"
             continue
         fi
-
+        
         new_dir="$base_save_dir/${dir_name}-mindre-filer"
         mkdir -p "$new_dir"
         
@@ -284,7 +289,7 @@ echo "Bevakning startad. Logg sparas i: $log_file"
 while true; do
     if [[ ! -f "$input_file" ]]; then
         echo "Hittar inte listan. Skapar en ny automatisk fil på: $input_file"
-        echo "# Lägg till Webbsite(webbsajt)-namn, hela URL-adresser, delay(sekunder), url(länk, \"Mappnamn\") eller clear(folder) här" > "$input_file"
+        echo "# Lägg till Webbsite(webbsajt)-namn, hela URL-adresser, delay(sekunder), url(länk, \"Mappnamn\"), clear(folder) eller exit(0) här" > "$input_file"
         echo "# Rader som börjar med # hoppas över automatiskt" >> "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
@@ -310,7 +315,13 @@ while true; do
             continue
         fi
 
-        # --- NY FUNKTION: Kolla efter det dynamiska kommandot clear(folder) ---
+        # --- NY FUNKTION: Kolla efter kommandot exit(0) ---
+        if [[ "$item" == "exit(0)" || "$item" == "Exit(0)" || "$item" == "EXIT(0)" ]]; then
+            echo "--- Manuellt kommando: Stänger av skriptet via exit(0) ---"
+            cleanup_and_exit
+        fi
+
+        # --- Kolla efter det dynamiska kommandot clear(folder) ---
         if [[ "$item" == clear\(folder\) || "$item" == Clear\(folder\) || "$item" == CLEAR\(FOLDER\) ]]; then
             echo "--- Manuellt kommando: Startar automatisk mapp- och filrensning ---"
             run_folder_cleanup
@@ -388,9 +399,9 @@ while true; do
     else
         url="https://twitch.tv/${item}"
     fi
-    
-    # --- UPPDATERING SIDA 8 (I din fungerande v0.3.3) ---
-    # Vi lägger till _ inuti tr-kommandot för att stödja understreck
+
+    # NYTT: Skapa det säkra namnet på lock-filen (UTAN datum)
+    # Vi lägger till _ inuti kontrollen för att stödja understreck
     safe_name=$(echo "$url" | tr -dc '[:alnum:]_-')
     lock_file="$temp_dir/${safe_name}.lock"
     
@@ -398,7 +409,7 @@ while true; do
     if [[ "$current_dirkeep_active" == "yes" ]]; then
         check_folder="$active_folder_name"
         if [[ -f "$lock_file" ]]; then
-            running_pid=$(sed -n '1p' "$lock_file" 2>/dev/null | tr -d '\r\n\t')
+            running_pid=$(sed -n '1p' "$lock_file" 2>/dev/null | tr -d '\r\n\t ')
             if [[ -n "$running_pid" ]] && kill -0 "$running_pid" 2>/dev/null; then
                 echo "--- Mappen '$check_folder' hanteras just nu av ett annat fönster (PID: $running_pid). Hoppar över! ---"
                 continue
@@ -414,7 +425,7 @@ while true; do
 
     # NYTT: SJÄLVLÄKANDE OCH KROCKSÄKER LÅSKONTROLL (Kanalerna krockar ALDRIG mer!)
     if [[ -f "$lock_file" ]]; then
-        running_pid=$(sed -n '1p' "$lock_file" 2>/dev/null | tr -d '\r\n\t')
+        running_pid=$(sed -n '1p' "$lock_file" 2>/dev/null | tr -d '\r\n\t ')
         if [[ -n "$running_pid" ]] && kill -0 "$running_pid" 2>/dev/null; then
             echo "--- $url körs just nu i ett annat fönster (PID: $running_pid). Hoppar över. ---"
             continue

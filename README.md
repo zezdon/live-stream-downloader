@@ -71,7 +71,14 @@ När `overwrite(dirkeep)` är aktiverat gör skriptet en blixtsnabb kontroll *in
 ### 3. Återställa kontrollen: `overwrite(no)`
 När du har kört en TikTok-profil med `dirkeep` vill du oftast att dina vanliga Twitch- eller YouTube-livesändningar ska kontrolleras som vanligt (så att de spelas in om de går online, även om mappen redan finns). Då skriver du helt enkelt `overwrite(no)` på raden efter för att stänga av den snabba mappkontrollen.
 
+
+
 ## Komplett exempel på en avancerad lista
+
+### 1. Skräddarsydda mappnamn: `url(adress, "mappnamn")`
+Standardbeteendet för skriptet är att automatiskt skapa en undermapp baserad på kanalens eller profilens riktiga namn. Om du vill ha en egen struktur och själv bestämma vad mappen ska heta, använder du kommandot `url()` med två parametrar separerade med ett kommatecken:
+* **Parameter 1:** Den internetadress (URL) som ska laddas ner eller spelas in.
+* **Parameter 2:** Det namn du vill att undermappen ska få på din hårddisk. **OBS!** Det rekommenderas i dagsläget att du endast använder vanliga bokstäver (a-z) och siffror (0-9) i detta fält för maximal stabilitet.
 
 Här är ett exempel på hur din textfil kan se ut när du kombinerar alla dessa smarta funktioner för att skapa ett effektivt flöde:
 
@@ -99,8 +106,8 @@ När skriptet når raden `clear(folder)` körs följande procedur helt automatis
 2. **Hanterar avbrutna filer:** Tar automatiskt bort `.part`-filändelsen på inspelningar som avbrutits och markerar dem med `-avbruten.mp4` i filnamnet så att de blir vanliga spelbara videofiler.
 3. **Sorterar mindre videofiler:** Hittar färdiga videofiler som är mindre än 100 MB (ofta korta testklipp eller skräpfiler från streams som snabbt gått ner) och flyttar dem till en separat undermapp märkt med `-mindre-filer` i slutet.
 
-### Hantering av specialtecken i mappnamn
-Skriptet är fullt fönstersäkrat och stöder att du använder specialtecken som bindestreck (`-`), understreck (`_`) eller mellanslag i dina skräddarsydda mappnamn, utan att terminalerna krockar eller att filerna sorteras fel.
+### Hantering av specialtecken i mappnamn (Under utveckling / ToDo)
+Skriptet är fullt fönstersäkrat när du använder standardtecken. Att använda specialtecken som bindestreck (`-`) eller understreck (`_`) i de skräddarsydda mappnamnen i kombination med den automatiska städfunktionen `clear(folder)` är i skrivande stund under utveckling och ligger på projektets officiella ToDo-lista för framtida uppdateringar.
 
 *Exempel:*
 ```text
@@ -134,3 +141,55 @@ overwrite(dirkeep)
 
 # Dina kanaler...
 ```
+## Avsluta skriptet automatiskt: `exit(0)`
+
+Standardbeteendet för skriptet är att ligga i en oändlig loop, vilket innebär att när det har gått igenom hela din bevakningslista så börjar det om från början igen. Om du istället kör skriptet via schemalagda verktyg i bakgrunden (som **Crontab** en gång i timmen), vill du oftast att skriptet bara gör en enda genomsökning av listan och sedan stänger ner sig själv.
+
+För att aktivera en sådan engångsskanning använder du kommandot `exit(0)` (eller `Exit(0)`) på sista raden i din textfil.
+
+När skriptet stöter på detta kommando gör det följande:
+1. Slutför alla pågående kontroller.
+2. Rensar och tar bort alla temporära låsfiler (`.lock`) i systemet så att inga hängande processer blir kvar.
+3. Avslutar skriptet helt och stänger ner terminalfönstret automatiskt.
+
+### Komplett exempel på en engångsskanning
+
+Här är ett exempel på hur din textfil kan se ut när du vill köra en säker och tyst genomsökning i bakgrunden utan att skriptet blir hängande i minnet:
+
+```text
+# Stäng av alla manuella startfrågor och feltexter
+initclean(no)
+initDebug(no)
+overwrite(dirkeep)
+
+# Skanna igenom dina valda kanaler en gång
+url(https://twitch.tv, "marzzzzy")
+delay(4)
+url(https://twitch.tv, "kameto")
+delay(4)
+
+# Utför en automatisk slutstädning av mappar och skräpfiler
+clear(folder)
+
+# Avsluta skriptet helt och frigör systemresurserna
+exit(0)
+```
+## Ändra eller nollställa dina inställningar
+
+Om du har råkat ange fel värden under skriptets första uppstart (till exempel fel antal ffmpeg-trådar eller felaktig storlek för skräpfiler), kan du enkelt nollställa dessa. Alla dina inställningar sparas säkert i en dold mapp som heter `.settings` precis där skriptet är installerat.
+
+För att navigera till skriptet och radera dina inställningar gör du följande i terminalen:
+
+1. Ta reda på exakt var ditt skript är installerat på datorn:
+   ```bash
+   ls -l stream-recorder.sh
+   ```
+2. Navigera till mappen där skriptet ligger (om du inte redan står där):
+   ```bash
+   cd /sökväg/till/mappen/
+   ```
+3. Radera hela inställningsmappen för att tvinga skriptet att ställa frågorna på nytt vid nästa start:
+   ```bash
+   rm -rf .settings
+   ```
+Du kan också välja att gå in i den dolda mappen `.settings` med textredigeraren `nano` för att ändra enskilda filer manuellt utan att radera allt.
