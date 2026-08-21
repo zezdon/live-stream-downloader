@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- KONFIGURATION ---
-script_version="v0.3.7" # UPPDATERAD VERSION
+script_version="v0.3.8" # UPPDATERAD VERSION
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -346,6 +346,66 @@ while true; do
         if [[ "$item" == clear\(folder\) || "$item" == Clear\(folder\) || "$item" == CLEAR\(FOLDER\) ]]; then
             echo "--- Manuellt kommando: Startar automatisk mapp- och filrensning ---"
             run_folder_cleanup
+            continue
+        fi
+        # ----------------------------------------------------------------------
+
+        # --- NY FUNKTION: HTML-LOGGEXPORT via export(log) (v0.3.8) ---
+        if [[ "$item" == "export(log)" || "$item" == "Export(log)" || "$item" == "EXPORT(LOG)" ]]; then
+            echo "--- Manuellt kommando: Exporterar loggfiler till HTML ---"
+            
+            log_mapp="$script_dir/log"
+            
+            # 1. Skapa log/index.html (HTML-strukturen)
+            cat << 'EOF' > "$log_mapp/index.html"
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Läs lokal text utan server</title>
+<style>
+    body { font-family: monospace; background-color: #1e1e1e; color: #d4d4d4; padding: 20px; }
+    pre { white-space: pre-wrap; word-wrap: break-word; background: #252526; padding: 15px; border-radius: 5px; }
+</style>
+</head>
+<body>
+<h2>Stream Recorder - Logghistorik</h2>
+<pre id="fileContent">Hämtar lokal data...</pre>
+<!-- 1. Ladda textfilen först -->
+<script src="logData.js"></script>
+<!-- 2. Ladda logiken sen -->
+<script src="simplelog.js"></script>
+</body>
+</html>
+EOF
+
+            # 2. Skapa log/simplelog.js (JavaScript-logiken)
+            cat << 'EOF' > "$log_mapp/simplelog.js"
+// Körs så fort sidan öppnas
+window.addEventListener("DOMContentLoaded", () => {
+    // Variabeln från logData.js är tillgänglig direkt
+    if (typeof minTextData !== "undefined") {
+        document.getElementById("fileContent").textContent = minTextData;
+    } else {
+        document.getElementById("fileContent").textContent = "Kunde inte hitta logdata.js";
+    }
+});
+EOF
+
+            # 3. Skapa log/logData.js och klistra in innehållet från stream_history.log dynamiskt
+            echo "// Konfidentiellt: Texten sparas i en global variabel" > "$log_mapp/logData.js"
+            echo "const minTextData = \`" >> "$log_mapp/logData.js"
+            
+            if [[ -f "$log_file" ]]; then
+                cat "$log_file" >> "$log_mapp/logData.js"
+            else
+                echo "[Ingen logghistorik hittades ännu]" >> "$log_mapp/logData.js"
+            fi
+            
+            echo "\`;" >> "$log_mapp/logData.js"
+
+            echo "-> Export klar! Filerna index.html, simplelog.js och logData.js har skapats i mappen: $log_mapp"
             continue
         fi
         # ----------------------------------------------------------------------

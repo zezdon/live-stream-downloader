@@ -120,6 +120,36 @@ När skriptet når raden `clear(folder)` körs följande procedur helt automatis
 2. **Hanterar avbrutna filer:** Tar automatiskt bort `.part`-filändelsen på inspelningar som avbrutits och markerar dem med `-avbruten.mp4` i filnamnet så att de blir vanliga spelbara videofiler.
 3. **Sorterar mindre videofiler:** Hittar färdiga videofiler som är mindre än 100 MB (ofta korta testklipp eller skräpfiler från streams som snabbt gått ner) och flyttar dem till en separat undermapp märkt med `-mindre-filer` i slutet.
 
+## Visa loggfiler i webbläsaren: `export(log)`
+
+Om du vill få en snyggare, mer interaktiv och lättläst översikt av din inspelningshistorik (`stream_history.log`) kan du exportera hela loggen till en modern webbsida (HTML/JavaScript) direkt i ditt system. 
+
+Detta gör du genom att skriva kommandot `export(log)` (eller `Export(log)`) i din textfil.
+
+När skriptet når raden `export(log)` skapas tre filer automatiskt inuti din `log/`-mapp:
+1. **`index.html`** – Själva webbsidan som visar loggen.
+2. **`simplelog.js`** – JavaScript-logiken som läser in datan digitalt.
+3. **`logData.js`** – En databasfil där skriptet automatiskt har klistrat in allt innehåll från din riktiga loggfil.
+
+### Hur du visar din webb-logg:
+1. Öppna din filhanterare i Linux eller på din Raspberry Pi.
+2. Gå in i mappen **`log`** som ligger precis bredvid ditt skript.
+3. Dubbelklicka på filen **`index.html`** för att öppna och läsa hela din logghistorik direkt i din vanliga webbläsare, helt utan att behöva starta någon extern webbserver!
+
+*Exempel på automatiserat flöde:*
+```text
+initclean(no)
+initDebug(no)
+
+# Dina kanaler...
+marzzzzy
+delay(5)
+
+# Städa upp archive, generera webb-loggen och stäng sedan av tyst via Crontab
+clear(folder)
+export(log)
+exit(clean)
+```
 ### Hantering av specialtecken i mappnamn (Under utveckling / ToDo)
 Skriptet är fullt fönstersäkrat när du använder standardtecken. Att använda specialtecken som bindestreck (`-`) eller understreck (`_`) i de skräddarsydda mappnamnen i kombination med den automatiska städfunktionen `clear(folder)` är i skrivande stund under utveckling och ligger på projektets officiella ToDo-lista för framtida uppdateringar.
 
