@@ -97,6 +97,20 @@ overwrite(no)
 url(https://youtube.com, "Boten Anna")
 delay(5)
 ```
+### 3. Tidsbegränsad inspelning: `urltimer(adress, "mappnamn", minuter)`
+Många kanaler på plattformar som Twitch sänder gamla repriser eller dygnet-runt-sändningar. Om du låter skriptet bevaka en sådan kanal i bakgrunden finns det en risk att inspelningen aldrig stängs av, vilket snabbt kan fylla hårddisken med gigantiska filer (på 50 GB eller mer). 
+
+För att förhindra detta kan du använda specialkommandot `urltimer()` (eller `urlTimer()`) som tar emot **tre parametrar** separerade med kommatecken:
+* **Parameter 1:** Internetadressen (URL) som ska spelas in.
+* **Parameter 2:** Det namn du vill att undermappen ska få på din hårddisk (omges av citationstecken).
+* **Parameter 3:** Det **maximala antalet minuter** som skriptet tillåts spela in innan strömmen automatiskt kopplas bort.
+
+*Exempel:*
+```text
+urltimer(https://twitch.tv, "mitt-arkiv", 120)
+```
+Detta startar bevakningen av kanalen precis som vanligt. Om kanalen går online spelas den in i **max 120 minuter (2 timmar)**. När tiden har gått ut skickar skriptet en säker avbrottssignal, sparar och stänger videofilen helt intakt i mappen, städar bort sin låsfil och går direkt vidare till nästa rad i din bevakningslista.
+
 ## Automatisk städning: `clear(folder)`
 
 När du kör skriptet i bakgrunden (till exempel via Crontab eller Systemctl) finns det ingen användare på plats som kan trycka på 'q' för att starta städningen. Då använder du det dynamiska kommandot `clear(folder)` direkt i din textfil för att schemalägga städningen automatiskt.

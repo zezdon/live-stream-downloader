@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- KONFIGURATION ---
-script_version="v0.3.6" # UPPDATERAD VERSION
+script_version="v0.3.7" # UPPDATERAD VERSION
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -289,7 +289,8 @@ echo "Bevakning startad. Logg sparas i: $log_file"
 while true; do
     if [[ ! -f "$input_file" ]]; then
         echo "Hittar inte listan. Skapar en ny automatisk fil på: $input_file"
-        echo "# Lägg till Webbsite(webbsajt)-namn, hela URL-adresser, delay(sekunder), url(länk, \"Mappnamn\"), clear(folder), exit(0), exit(quit) eller exit(clean) här" > "$input_file"
+        echo "# Lägg till Webbsite(webbsajt)-namn, hela URL-adresser, delay(sekunder), url(länk, \"Mappnamn\"), urlTimer(länk, \"Mappnamn\", minuter) eller clear(folder) här" > "$input_file"   
+        echo ", exit(0), exit(quit) eller exit(clean) här" > "$input_file"
         echo "# Rader som börjar med # hoppas över automatiskt" >> "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
@@ -383,30 +384,52 @@ while true; do
       fi
       continue
     fi
+    
+        # --- FUNKTION: Avancerad URL-, Mapp- och Timerväljare (v0.3.7 - FELSÄKRAD) ---
+        custom_folder=""
+        custom_timeout=""
 
-    # 4. FUNKTION: Avancerad URL- och Mappväljare
-    custom_folder=""
-    if [[ "$item" == url\(* || "$item" == Url\(* ]]; then
-      if [[ "$item" != *","* ]]; then
-        echo "-> FEL: Raden '$item' saknar kommatecken (,). Hoppar över..."
-        continue
-      fi
-      # 1. Klipp ut allt efter "url(" fram till kommatecknet
-      extracted_url=$(echo "$item" | sed -E "s/^[uU]rl\(([^,]+),.*/\1/" | xargs)
+        # A) Vi kollar om raden startar med urltimer( eller UrlTimer( oavsett skiftläge
+        if [[ "$item" == urltimer\(* || "$item" == UrlTimer\(* || "$item" == URLTIMER\(* ]]; then
+            # Vi klipper ut allt som står inuti parenteserna genom att rensa bort "urltimer(" och ")"
+            # Vi använder sed -I för att strunta i om det är stora eller små bokstäver i själva ordet
+            inner_content=$(echo "$item" | sed -E 's/^[uU]rl[tT]imer\((.*)\)$/\1/')
+            
+            # Dela upp de tre delarna strikt baserat på kommatecken
+            extracted_url=$(echo "$inner_content" | cut -d',' -f1 | xargs)
+            extracted_folder=$(echo "$inner_content" | cut -d',' -f2)
+            extracted_minutes=$(echo "$inner_content" | cut -d',' -f3 | tr -dc '0-9')
+            
+            # Tvätta mappnamnet från parenteser och citationstecken
+            custom_folder=$(echo "$extracted_folder" | tr -d ')' | tr -d '"' | tr -d "'" | xargs)
+            
+            # Gör om minuter till sekunder för Linux timeout-kommando
+            if [[ -n "$extracted_minutes" ]]; then
+                custom_timeout="$((extracted_minutes * 60))"
+                echo "-> Timer aktiverad: Max inspelningstid är $extracted_minutes minuter ($custom_timeout sekunder)."
+            fi
+            
+            item="$extracted_url"
+            echo "-> Identifierade urlTimer-kommando!"
+            echo "-> Länk: $item"
+            echo "-> Mapp: $custom_folder"
 
-      # 2. Klipp ut allt efter kommatecknet till slutet av raden
-      extracted_folder=$(echo "$item" | cut -d',' -f2-)
-
-      # 3. Tvätta mappnamnet: ta bort slutparentes och alla typer av citationstecken
-      custom_folder=$(echo "$extracted_folder" | tr -d ')"' | tr -d "'" | xargs)
-
-      # 4. Sätt variabeln item till den rena länken
-      item="$extracted_url"
-
-      echo "-> Identifierade specialkommando!"
-      echo "-> Länk: $item"
-      echo "-> Mapp: $custom_folder"
-    fi
+        # B) Om det inte var en urlTimer, kolla efter det vanliga url(länk, "Mapp")
+        elif [[ "$item" == url\(* || "$item" == Url\(* || "$item" == URL\(* ]]; then
+            if [[ "$item" != *","* ]]; then
+                echo "-> FEL: Raden '$item' saknar kommatecken (,). Hoppar över..."
+                continue
+            fi
+            extracted_url=$(echo "$item" | sed -E "s/^[uU]rl\(([^,]+),.*/\1/" | xargs)
+            extracted_folder=$(echo "$item" | cut -d',' -f2-)
+            custom_folder=$(echo "$extracted_folder" | tr -d ')' | tr -d '"' | tr -d "'" | xargs)
+            item="$extracted_url"
+            
+            echo "-> Identifierade specialkommando!"
+            echo "-> Länk: $item"
+            echo "-> Mapp: $custom_folder"
+        fi
+        # ------------------------------------------------------------------
 
     item="${item#/}"
     item="${item%/}"
@@ -467,12 +490,18 @@ while true; do
       output_template="$base_save_dir/%(uploader)s/%(title)s - %(upload_date)s.%(ext)s"
     fi
 
-        # Kör yt-dlp med det för stunden gällande overwrite-läget
-        # Kör yt-dlp och skicka feltexten till vår dynamiska debug-variabel
-        yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
-            -o "$output_template" "$url" </dev/null 2>$debug_output
+        # Bestäm om vi ska köra med eller utan tidsbegränsning (timeout)
+        if [[ -n "$custom_timeout" ]]; then
+            # Linux timeout skickar en signal (SIGINT) efter X sekunder så att inspelningen sparas snyggt
+            timeout --signal=SIGINT "$custom_timeout" yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
+                -o "$output_template" "$url" </dev/null 2>$debug_output
+        else
+            # Standardkörning utan tidsbegränsning som förut
+            yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
+                -o "$output_template" "$url" </dev/null 2>$debug_output
+        fi
+        status=$?
 
-    status=$?
     rm -f "$lock_file"
 
     # KORRIGERING: Helt omarbetad och isolerad loggning. Krockar aldrig med kanal 3!
