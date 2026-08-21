@@ -141,17 +141,44 @@ overwrite(dirkeep)
 
 # Dina kanaler...
 ```
-## Avsluta skriptet automatiskt: `exit(0)`
+## Avsluta skriptet automatiskt: `exit(quit)` och `exit(clean)`
 
-Standardbeteendet för skriptet är att ligga i en oändlig loop, vilket innebär att när det har gått igenom hela din bevakningslista så börjar det om från början igen. Om du istället kör skriptet via schemalagda verktyg i bakgrunden (som **Crontab** en gång i timmen), vill du oftast att skriptet bara gör en enda genomsökning av listan och sedan stänger ner sig själv.
+Standardbeteendet för skriptet är att loopa i evighet. När det har gått igenom hela din bevakningslista så börjar det om från början igen. Om du kör skriptet via schemalagda bakgrundsverktyg (som **Crontab** en gång i timmen), vill du att skriptet gör en genomsökning och sedan stänger ner sig själv.
 
-För att aktivera en sådan engångsskanning använder du kommandot `exit(0)` (eller `Exit(0)`) på sista raden i din textfil.
+För att styra exakt hur skriptet ska stängas av kan du använda följande kommandon på sista raden i din textfil:
 
-När skriptet stöter på detta kommando gör det följande:
-1. Slutför alla pågående kontroller.
-2. Rensar och tar bort alla temporära låsfiler (`.lock`) i systemet så att inga hängande processer blir kvar.
-3. Avslutar skriptet helt och stänger ner terminalfönstret automatiskt.
+### 1. Avsluta omedelbart: `exit(quit)` eller `exit(0)`
+Detta kommando avslutar skriptet och stänger terminalfönstret **direkt på sekunden**. Ingen extra städning eller sortering körs, utan skriptet frigör bara sina låsfiler och stänger ner omedelbart. Det är perfekt om du vill köra en snabb manuell test av din lista.
 
+### 2. Tyst städning och avslut: `exit(clean)`
+Detta är det **rekommenderade kommandot för Crontab och Systemctl**. När skriptet stöter på `exit(clean)` körs hela städfunktionen (`run_folder_cleanup`) helt automatiskt i bakgrunden:
+* Tomma mappar raderas.
+* Avbrutna `.part`-filer fixas till spelbara `-avbruten.mp4`-filer.
+* Småfiler sorteras till en specifik mapp.
+
+Hela denna städprocedur körs **helt tyst utan att ställa några frågor** till användaren, och när det är klart stängs skriptet ner klockrent.
+
+---
+
+### Komplett exempel på en automatiserad lista (Crontab-vänlig)
+
+Här är ett exempel på hur din textfil kan se ut när du vill köra en säker, tyst genomsökning i bakgrunden som städar upp efter sig och stänger av sig själv utan att fastna i minnet:
+
+```text
+# Stäng av alla manuella startfrågor och feltexter
+initclean(no)
+initDebug(no)
+overwrite(dirkeep)
+
+# Skanna igenom dina valda kanaler en gång
+url(https://twitch.tv, "marzzzzy")
+delay(4)
+url(https://twitch.tv, "kameto")
+delay(4)
+
+# Kör automatisk städning utan frågor och avsluta sedan skriptet helt
+exit(clean)
+```
 ### Komplett exempel på en engångsskanning
 
 Här är ett exempel på hur din textfil kan se ut när du vill köra en säker och tyst genomsökning i bakgrunden utan att skriptet blir hängande i minnet:

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- KONFIGURATION ---
-script_version="v0.3.5" # UPPDATERAD VERSION
+script_version="v0.3.6" # UPPDATERAD VERSION
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -289,7 +289,7 @@ echo "Bevakning startad. Logg sparas i: $log_file"
 while true; do
     if [[ ! -f "$input_file" ]]; then
         echo "Hittar inte listan. Skapar en ny automatisk fil på: $input_file"
-        echo "# Lägg till Webbsite(webbsajt)-namn, hela URL-adresser, delay(sekunder), url(länk, \"Mappnamn\"), clear(folder) eller exit(0) här" > "$input_file"
+        echo "# Lägg till Webbsite(webbsajt)-namn, hela URL-adresser, delay(sekunder), url(länk, \"Mappnamn\"), clear(folder), exit(0), exit(quit) eller exit(clean) här" > "$input_file"
         echo "# Rader som börjar med # hoppas över automatiskt" >> "$input_file"
         echo "byt_ut_mig_mot_streamernamn" >> "$input_file"
         exit 1
@@ -309,17 +309,37 @@ while true; do
         item=$(echo "$clean_line" | xargs)
         
         [[ -z "$item" ]] && continue
-
         # Hoppa över initclean() och initDebug() i loopen (sköts vid start)
         if [[ "$item" == initclean\(* || "$item" == InitClean\(* || "$item" == initClean\(* || "$item" == INITCLEAN\(* || "$item" == initdebug\(* || "$item" == initDebug\(* || "$item" == InitDebug\(* || "$item" == INITDEBUG\(* ]]; then
             continue
         fi
 
-        # --- NY FUNKTION: Kolla efter kommandot exit(0) ---
-        if [[ "$item" == "exit(0)" || "$item" == "Exit(0)" || "$item" == "EXIT(0)" ]]; then
-            echo "--- Manuellt kommando: Stänger av skriptet via exit(0) ---"
-            cleanup_and_exit
+        # --- KORRIGERAT BLOCK FÖR AVANCERADE AVSLUTNINGSKOMMANDON (v0.3.6) ---
+        # 1. exit(0) och exit(quit) - Avslutar omedelbart utan frågor eller städning
+        if [[ "$item" == "exit(0)" || "$item" == "Exit(0)" || "$item" == "EXIT(0)" || "$item" == "exit(quit)" || "$item" == "Exit(quit)" || "$item" == "EXIT(QUIT)" ]]; then
+            echo "--- Manuellt kommando: Avslutar skriptet omedelbart ---"
+            # Vi städar bara bort lock-filen för den här specifika terminalen innan vi stänger
+            find "$temp_dir" -name "*.lock" -type f | while read -r lock_f; do
+                if [ "$(cat "$lock_f" 2>/dev/null | sed -n '1p')" == "$$" ]; then
+                    rm -f "$lock_f" 2>/dev/null
+                fi
+            done
+            exit 0
         fi
+
+        # 2. exit(clean) - Kör tyst städning automatiskt utan frågor, och avslutar sedan
+        if [[ "$item" == "exit(clean)" || "$item" == "Exit(clean)" || "$item" == "EXIT(CLEAN)" ]]; then
+            echo "--- Manuellt kommando: Kör automatisk städning och avslutar ---"
+            # Ta bort lock-filen för den här terminalen först
+            find "$temp_dir" -name "*.lock" -type f | while read -r lock_f; do
+                if [ "$(cat "$lock_f" 2>/dev/null | sed -n '1p')" == "$$" ]; then
+                    rm -f "$lock_f" 2>/dev/null
+                fi
+            done
+            run_folder_cleanup # Kör städningen direkt
+            exit 0
+        fi        
+        # ----------------------------------------------------------------------
 
         # --- Kolla efter det dynamiska kommandot clear(folder) ---
         if [[ "$item" == clear\(folder\) || "$item" == Clear\(folder\) || "$item" == CLEAR\(FOLDER\) ]]; then
