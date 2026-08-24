@@ -1,7 +1,13 @@
 #!/bin/bash
 
+#!/bin/bash
+
+# --- CRONTAB MILJÖSÄKRING ---
+# Garanterar att Crontab hittar yt-dlp, ffmpeg och lokala program i bakgrunden
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
+
 # --- KONFIGURATION ---
-script_version="v0.3.8" # UPPDATERAD VERSION
+script_version="v0.3.9" # UPPDATERAD VERSION
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -12,12 +18,40 @@ log_file="$script_dir/log/stream_history.log"
 temp_dir="/tmp/stream_locks"
 today=$(date +%Y%m%d)
 
-# NYTT: Samlar alla konfigurationsfiler i en egen dold '.settings'-mapp bredvid skriptet
 settings_dir="$script_dir/.settings"
 config_file="$settings_dir/.ffmpeg_threads_config"
 size_config_file="$settings_dir/.file_size_config"
 sleep_config_file="$settings_dir/.sleep_config"
+
+global_pid_file="/tmp/streamrecorder.pid"
+# NYTT: Testfil för att räkna Crontab-körningar
+test_cron_file="$script_dir/crontab.txt"
 # ---------------------
+
+# NYTT: Räknare för crontab.txt testfilen
+if [[ -f "$test_cron_file" ]]; then
+    # Läs förra numret, addera 1
+    last_count=$(tail -n 1 "$test_cron_file" | tr -dc '0-9')
+    [[ -z "$last_count" ]] && last_count=0
+    next_count=$((last_count + 1))
+else
+    next_count=1
+fi
+# Skriv den nya raden till testfilen direkt vid start
+echo "Körning nummer $next_count kördes via systemet: $(date '+%Y-%m-%d %H:%M:%S')" >> "$test_cron_file"
+
+# Om skriptet redan körs i bakgrunden, stäng av den nya instansen direkt.
+# Dubbelgångar-skydd för Crontab
+if [[ -f "$global_pid_file" ]]; then
+    old_pid=$(cat "$global_pid_file" 2>/dev/null)
+    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+        # Skriptet körs redan, avsluta tyst utan att krocka
+        exit 0
+    fi
+fi
+
+# Spara denna terminalkörnings unika PID i filen
+echo "$$" > "$global_pid_file"
 
 # Skapa mappar automatiskt om de inte existerar
 mkdir -p "$temp_dir"
@@ -62,24 +96,37 @@ if [[ -n "$key" ]]; then
     echo -e "\nHoppar över fördröjningen och startar direkt..."
 fi
 
-# 3. För-skanning av textfilen efter initclean och overwrite
+# 3. För-skanning av textfilen efter initclean, initDebug, overwrite och initCrontab
 auto_clean=""
-debug_output="/dev/null" # Standard (default): Gömmer feltext
+debug_output="/dev/null"
 overwrite_mode="--no-overwrites"
 dirkeep_active="no"
+cron_minutes=""
 
 if [[ -f "$input_file" ]]; then
-    # Skanna efter initclean
-    if grep -iq "^[[:space:]]*initclean(yes)" "$input_file"; then
-        auto_clean="yes"
-    elif grep -iq "^[[:space:]]*initclean(no)" "$input_file"; then
-        auto_clean="no"
-    fi
+    # Skanna efter initclean och initDebug som vanligt...
+    if grep -iq "^[[:space:]]*initclean(yes)" "$input_file"; then auto_clean="yes"; fi
+    if grep -iq "^[[:space:]]*initclean(no)" "$input_file"; then auto_clean="no"; fi
+    if grep -iq "^[[:space:]]*initdebug(yes)" "$input_file"; then debug_output="/dev/stderr"; fi
 
-    # Skanna efter initDebug vid start
-    if grep -iq "^[[:space:]]*initdebug(yes)" "$input_file"; then
-        debug_output="/dev/stderr"
-        echo "System: Debug-läge AKTIVERAT. Röd feltext visas."
+    # NYTT: Skanna efter initCrontab(X) och kolla att en exit-rad finns i filen
+    if grep -iq "^[[:space:]]*initcrontab(" "$input_file"; then
+        # Klipp ut minut-siffran ur parentesen
+        cron_minutes=$(grep -io "^[[:space:]]*initcrontab([0-9]\+)" "$input_file" | tr -dc '0-9')
+                
+        # --- KORRIGERAT CRONTAB-INSTALLATIONSBLOCK (Sida 3 i PDF) ---
+        if grep -iq "^[[:space:]]*exit(" "$input_file"; then
+            cron_cmd="$(readlink -f "$0")"
+            # Vi bygger det rena crontab-jobbet utan några dolda tecken
+            cron_job="*/$cron_minutes * * * * $cron_cmd"
+            
+            # KORRIGERING: Vi använder strikt bokstaven -l (List) överallt istället för siffran -1
+            # Vi använder strikt bokstaven -l (List) överallt istället för siffran -1
+            (crontab -l 2>/dev/null | grep -q "$cron_cmd") || (crontab -l 2>/dev/null; echo "$cron_job") | crontab -
+            echo "System: initCrontab($cron_minutes) AKTIVERAD. Skriptet körs nu automatiskt var $cron_minutes:e minut."
+        else
+            echo "System: initCrontab IGNORERAD! Du måste ha en 'exit(clean)' eller 'exit(quit)' längst ner i din textfil."
+        fi
     fi
 
     # Skanna efter overwrite
@@ -261,12 +308,17 @@ run_folder_cleanup() {
 
 cleanup_and_exit() {
     echo -e "\n"
+    # --- UPPDATERING I CLEANUP_AND_EXIT ---
     find "$temp_dir" -name "*.lock" -type f | while read -r lock_f; do
-        if [ "$(cat "$lock_f" 2>/dev/null)" == "$$" ]; then
+        if [ "$(cat "$lock_f" 2>/dev/null | sed -n '1p')" == "$$" ]; then
             rm -f "$lock_f" 2>/dev/null
         fi
     done
     
+    rm -f "$global_pid_file" 2>/dev/null # NYTT: Tar bort globala PID-filen vid avslut
+    # ... (resten av din cleanup_and_exit-funktion fortsätter som vanligt) ...
+    exit 0
+
     read -p "Vill du behålla de nedladdade filerna? (j/n): " choice
     if [[ "$choice" =~ ^(n|N|nej|NEJ)$ ]]; then
         echo -e "\a"
@@ -311,36 +363,36 @@ while true; do
         
         [[ -z "$item" ]] && continue
         # Hoppa över initclean() och initDebug() i loopen (sköts vid start)
-        if [[ "$item" == initclean\(* || "$item" == InitClean\(* || "$item" == initClean\(* || "$item" == INITCLEAN\(* || "$item" == initdebug\(* || "$item" == initDebug\(* || "$item" == InitDebug\(* || "$item" == INITDEBUG\(* ]]; then
+        # Hoppa över init-kommandon i loopen (sköts vid start)
+        if [[ "$item" == initclean\(* || "$item" == InitClean\(* || "$item" == initClean\(* || "$item" == INITCLEAN\(* || "$item" == initdebug\(* || "$item" == initDebug\(* || "$item" == InitDebug\(* || "$item" == INITDEBUG\(* || "$item" == initcrontab\(* || "$item" == initCrontab\(* || "$item" == InitCrontab\(* || "$item" == INITCRONTAB\(* ]]; then
             continue
         fi
 
-        # --- KORRIGERAT BLOCK FÖR AVANCERADE AVSLUTNINGSKOMMANDON (v0.3.6) ---
-        # 1. exit(0) och exit(quit) - Avslutar omedelbart utan frågor eller städning
+        # --- KORRIGERADE OCH STÄDADE AVSLUTNINGSKOMMANDON (Sida 8 i PDF) ---
+        # 1. exit(0) och exit(quit)
         if [[ "$item" == "exit(0)" || "$item" == "Exit(0)" || "$item" == "EXIT(0)" || "$item" == "exit(quit)" || "$item" == "Exit(quit)" || "$item" == "EXIT(QUIT)" ]]; then
             echo "--- Manuellt kommando: Avslutar skriptet omedelbart ---"
-            # Vi städar bara bort lock-filen för den här specifika terminalen innan vi stänger
             find "$temp_dir" -name "*.lock" -type f | while read -r lock_f; do
                 if [ "$(cat "$lock_f" 2>/dev/null | sed -n '1p')" == "$$" ]; then
                     rm -f "$lock_f" 2>/dev/null
                 fi
             done
+            rm -f "$global_pid_file" 2>/dev/null # Raderar globala PID-filen
             exit 0
         fi
 
-        # 2. exit(clean) - Kör tyst städning automatiskt utan frågor, och avslutar sedan
+        # 2. exit(clean)
         if [[ "$item" == "exit(clean)" || "$item" == "Exit(clean)" || "$item" == "EXIT(CLEAN)" ]]; then
             echo "--- Manuellt kommando: Kör automatisk städning och avslutar ---"
-            # Ta bort lock-filen för den här terminalen först
             find "$temp_dir" -name "*.lock" -type f | while read -r lock_f; do
                 if [ "$(cat "$lock_f" 2>/dev/null | sed -n '1p')" == "$$" ]; then
                     rm -f "$lock_f" 2>/dev/null
                 fi
             done
-            run_folder_cleanup # Kör städningen direkt
+            run_folder_cleanup
+            rm -f "$global_pid_file" 2>/dev/null # Raderar globala PID-filen
             exit 0
-        fi        
-        # ----------------------------------------------------------------------
+        fi
 
         # --- Kolla efter det dynamiska kommandot clear(folder) ---
         if [[ "$item" == clear\(folder\) || "$item" == Clear\(folder\) || "$item" == CLEAR\(FOLDER\) ]]; then
