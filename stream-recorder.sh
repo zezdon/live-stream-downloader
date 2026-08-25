@@ -1,13 +1,11 @@
 #!/bin/bash
 
-#!/bin/bash
-
 # --- CRONTAB MILJÖSÄKRING ---
 # Garanterar att Crontab hittar yt-dlp, ffmpeg och lokala program i bakgrunden
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
 
 # --- KONFIGURATION ---
-script_version="v0.4.0" # UPPDATERAD VERSION
+script_version="v0.4.1" # UPPDATERAD VERSION
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -24,28 +22,23 @@ size_config_file="$settings_dir/.file_size_config"
 sleep_config_file="$settings_dir/.sleep_config"
 
 global_pid_file="/tmp/streamrecorder.pid"
-# NYTT: Testfil för att räkna Crontab-körningar
 test_cron_file="$script_dir/crontab.txt"
 # ---------------------
 
-# NYTT: Räknare för crontab.txt testfilen
+# Räknare för crontab.txt testfilen
 if [[ -f "$test_cron_file" ]]; then
-    # Läs förra numret, addera 1
     last_count=$(tail -n 1 "$test_cron_file" | tr -dc '0-9')
     [[ -z "$last_count" ]] && last_count=0
     next_count=$((last_count + 1))
 else
     next_count=1
 fi
-# Skriv den nya raden till testfilen direkt vid start
 echo "Körning nummer $next_count kördes via systemet: $(date '+%Y-%m-%d %H:%M:%S')" >> "$test_cron_file"
 
-# Om skriptet redan körs i bakgrunden, stäng av den nya instansen direkt.
-# Dubbelgångar-skydd för Crontab
+# Dubbelgångar-skydd för Crontab (Helt orört från din fungerande v0.4.0)
 if [[ -f "$global_pid_file" ]]; then
     old_pid=$(cat "$global_pid_file" 2>/dev/null)
     if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
-        # Skriptet körs redan, avsluta tyst utan att krocka
         exit 0
     fi
 fi
@@ -56,9 +49,7 @@ echo "$$" > "$global_pid_file"
 # Skapa mappar automatiskt om de inte existerar
 mkdir -p "$temp_dir"
 mkdir -p "$script_dir/log"
-mkdir -p "$settings_dir" # NYTT: Skapar mappen .settings
-
-# NYTT: Skapar eller uppdaterar VERSION.txt automatiskt med den aktuella versionen
+mkdir -p "$settings_dir"
 echo "$script_version" > "$script_dir/VERSION.txt"
 
 # Skriv ut versionen direkt vid start
@@ -104,24 +95,15 @@ dirkeep_active="no"
 cron_minutes=""
 
 if [[ -f "$input_file" ]]; then
-    # Skanna efter initclean och initDebug som vanligt...
     if grep -iq "^[[:space:]]*initclean(yes)" "$input_file"; then auto_clean="yes"; fi
     if grep -iq "^[[:space:]]*initclean(no)" "$input_file"; then auto_clean="no"; fi
     if grep -iq "^[[:space:]]*initdebug(yes)" "$input_file"; then debug_output="/dev/stderr"; fi
 
-    # NYTT: Skanna efter initCrontab(X) och kolla att en exit-rad finns i filen
     if grep -iq "^[[:space:]]*initcrontab(" "$input_file"; then
-        # Klipp ut minut-siffran ur parentesen
         cron_minutes=$(grep -io "^[[:space:]]*initcrontab([0-9]\+)" "$input_file" | tr -dc '0-9')
-                
-        # --- KORRIGERAT CRONTAB-INSTALLATIONSBLOCK (Sida 3 i PDF) ---
         if grep -iq "^[[:space:]]*exit(" "$input_file"; then
             cron_cmd="$(readlink -f "$0")"
-            # Vi bygger det rena crontab-jobbet utan några dolda tecken
             cron_job="*/$cron_minutes * * * * $cron_cmd"
-            
-            # KORRIGERING: Vi använder strikt bokstaven -l (List) överallt istället för siffran -1
-            # Vi använder strikt bokstaven -l (List) överallt istället för siffran -1
             (crontab -l 2>/dev/null | grep -q "$cron_cmd") || (crontab -l 2>/dev/null; echo "$cron_job") | crontab -
             echo "System: initCrontab($cron_minutes) AKTIVERAD. Skriptet körs nu automatiskt var $cron_minutes:e minut."
         else
@@ -129,7 +111,6 @@ if [[ -f "$input_file" ]]; then
         fi
     fi
 
-    # Skanna efter overwrite
     if grep -iq "^[[:space:]]*overwrite(yes)" "$input_file"; then
         overwrite_mode="--force-overwrites"
         echo "System: Överskrivning AKTIVERAD (overwrite=yes)."
@@ -145,7 +126,7 @@ if [[ -f "$input_file" ]]; then
     fi
 fi
 
-# Hantering av initclean(yes/no) - Rensar loggfilen
+# Hantering av initclean(yes/no)
 if [[ "$auto_clean" == "yes" ]]; then
     if [[ -f "$log_file" ]]; then
         rm -f "$log_file" 2>/dev/null
@@ -207,10 +188,9 @@ if [ $sleep_interval -le 0 ]; then
     sleep_interval=1
 fi
 
-# Skapa huvudmappen for videofiler
 mkdir -p "$base_save_dir"
 
-# --- GAMMAL FÖNSTERSÄKRAD STÄDFUNKTION (Baserad på din stabila v0.3.3) ---
+# --- KORRIGERAD OCH FINPUTSAD STÄDFUNKTION (v0.4.1) ---
 run_folder_cleanup() {
     echo "Rensar tomma mappar men behåller dina inspelningar..."
     find "$base_save_dir" -mindepth 1 -type d -empty -delete
@@ -221,10 +201,11 @@ run_folder_cleanup() {
         lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
         is_active="no"
         for l_file in $lock_match; do
-            l_name=$(basename "$l_file" .lock)
-            if [[ "${l_name,,}" == *"${parent_dir,,}"* ]]; then
-                r_pid=$(cat "$l_file" 2>/dev/null)
-                if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+            r_pid=$(sed -n '1p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            l_folder=$(sed -n '2p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            # KORRIGERING: Lagat parenteserna ]] som var trasiga på sida 5 i din PDF
+            if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+                if [[ "${l_folder,,}" == "${parent_dir,,}" ]]; then
                     is_active="yes"
                     break
                 fi
@@ -240,10 +221,11 @@ run_folder_cleanup() {
         lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
         is_active="no"
         for l_file in $lock_match; do
-            l_name=$(basename "$l_file" .lock)
-            if [[ "${l_name,,}" == *"${parent_dir,,}"* ]]; then
-                r_pid=$(cat "$l_file" 2>/dev/null)
-                if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+            r_pid=$(sed -n '1p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            l_folder=$(sed -n '2p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            # KORRIGERING: Lagat parenteserna här med
+            if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+                if [[ "${l_folder,,}" == "${parent_dir,,}" ]]; then
                     is_active="yes"
                     break
                 fi
@@ -251,6 +233,7 @@ run_folder_cleanup() {
         done
         
         if [[ "$is_active" == "no" ]]; then
+            # KORRIGERING: Ändrat till önskat internationellt namn -was-interrupted
             new_file="${part_file%.mp4.part}-was-interrupted.mp4"
             mv "$part_file" "$new_file"
             echo "Fixade fil: $(basename "$part_file") -> $(basename "$new_file")"
@@ -258,21 +241,24 @@ run_folder_cleanup() {
     done
 
     echo "Sorterar mindre videofiler (mellan ${min_size_num}kb och 100000kb)..."
-    find "$base_save_dir" -type f -name "*.mp4" -size +"${min_size_num}k" -size -100000k | while read -r video_file; do
+    find "$base_save_dir" -type f -regextype posix-extended -regex '.*\.mp4$' -size +"${min_size_num}k" -size -100000k | while read -r video_file; do
         current_dir=$(dirname "$video_file")
         dir_name=$(basename "$current_dir")
         
-        if [[ "$dir_name" == *"-temp-files" ]]; then
+        # KORRIGERING: Ändrat kontrollen till -temp-file
+        if [[ "$dir_name" == *"-temp-file" ]]; then
             continue
         fi
         
         lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
         is_active="no"
+        
         for l_file in $lock_match; do
-            l_name=$(basename "$l_file" .lock)
-            if [[ "${l_name,,}" == *"${dir_name,,}"* ]]; then
-                r_pid=$(cat "$l_file" 2>/dev/null)
-                if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+            r_pid=$(sed -n '1p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            l_folder=$(sed -n '2p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            # KORRIGERING: Lagat parenteserna på sista stället i städningen
+            if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+                if [[ "${l_folder,,}" == "${dir_name,,}" ]]; then
                     is_active="yes"
                     break
                 fi
@@ -288,13 +274,7 @@ run_folder_cleanup() {
             continue
         fi
         
-        file_size_bytes=$(stat -c%s "$video_file" 2>/dev/null)
-        if [[ -n "$file_size_bytes" ]] && [ "$file_size_bytes" -lt 512000 ]; then
-            rm -f "$video_file" 2>/dev/null
-            echo "Tyst rensning: Tog bort tom skräpfil från offline-kanal: $(basename "$video_file")"
-            continue
-        fi
-        
+        # KORRIGERING: Flyttar till undermappen -temp-files
         new_dir="$base_save_dir/${dir_name}-temp-file"
         mkdir -p "$new_dir"
         
@@ -315,9 +295,9 @@ cleanup_and_exit() {
         fi
     done
     
-    rm -f "$global_pid_file" 2>/dev/null # NYTT: Tar bort globala PID-filen vid avslut
+    rm -f "$global_pid_file" 2>/dev/null # Tar bort globala PID-filen vid avslut
     # ... (resten av din cleanup_and_exit-funktion fortsätter som vanligt) ...
-    exit 0
+    #exit 0
 
     read -p "Vill du behålla de nedladdade filerna? (j/n): " choice
     if [[ "$choice" =~ ^(n|N|nej|NEJ)$ ]]; then
@@ -337,6 +317,8 @@ cleanup_and_exit() {
     exit 0
 }
 echo "Bevakning startad. Logg sparas i: $log_file"
+
+
 
 while true; do
     if [[ ! -f "$input_file" ]]; then
