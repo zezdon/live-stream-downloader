@@ -264,3 +264,26 @@ För att navigera till skriptet och radera dina inställningar gör du följande
    rm -rf .settings
    ```
 Du kan också välja att gå in i den dolda mappen `.settings` med textredigeraren `nano` för att ändra enskilda filer manuellt utan att radera allt.
+## Avancerat: Spela in flera strömmar samtidigt (Multi-Stream)
+
+Skriptet är utrustat med en intelligent låsmekanism (`.lock`) och unika Process-ID (PID) för varje enskild kanal. Detta innebär att skriptet har fullt stöd för **multi-streaming** – det vill säga att köra flera terminalfönster parallellt för att spela in olika livesändningar samtidigt från samma bevakningslista.
+
+När du kör en instans av skriptet och den hittar en kanal som är online, låser den strömmen och börjar spela in. Om du vill starta ytterligare en inspelning parallellt gör du på följande sätt:
+
+### Hur du startar parallella inspelningar manuellt:
+1. Låt det första terminalfönstret ligga kvar och spela in den första kanalen.
+2. Öppna ett nytt terminalfönster och radera den globala Crontab-spärren (PID-filen) i systemet med följande kommando:
+   ```bash
+   rm -f /tmp/streamrecorder.pid
+   ```
+3. Starta skriptet igen i det nya fönstret:
+   ```bash
+   bash stream-recorder.sh
+   ```
+
+Det nya fönstret kommer nu att starta, läsa din `stream-recorder.txt` och hoppa blixtsnabbt förbi den kanal som redan spelas in (tack vare låsfilen). Om det finns en annan kanal i listan som också är online, tar det nya fönstret över den och påbörjar en andra inspelning parallellt!
+
+Du kan upprepa denna procedur för att spela in tre, fyra eller ännu fler kanaler samtidigt, helt i bakgrunden.
+
+### Hur detta samarbetar med Crontab:
+Om du använder `initCrontab()`, är det globala dubbelgångar-skyddet inställt på att hålla systemet rent och förhindra att Crontab startar onödiga bakgrundsprocesser. Multi-stream-funktionen är därför främst optimerad för när du kör dina terminalfönster manuellt eller när du vill fördela specifika kanaler på fasta intervaller.

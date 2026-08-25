@@ -7,7 +7,7 @@
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
 
 # --- KONFIGURATION ---
-script_version="v0.3.9" # UPPDATERAD VERSION
+script_version="v0.4.0" # UPPDATERAD VERSION
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -251,7 +251,7 @@ run_folder_cleanup() {
         done
         
         if [[ "$is_active" == "no" ]]; then
-            new_file="${part_file%.mp4.part}-avbruten.mp4"
+            new_file="${part_file%.mp4.part}-was-interrupted.mp4"
             mv "$part_file" "$new_file"
             echo "Fixade fil: $(basename "$part_file") -> $(basename "$new_file")"
         fi
@@ -262,7 +262,7 @@ run_folder_cleanup() {
         current_dir=$(dirname "$video_file")
         dir_name=$(basename "$current_dir")
         
-        if [[ "$dir_name" == *"-mindre-filer" ]]; then
+        if [[ "$dir_name" == *"-temp-files" ]]; then
             continue
         fi
         
@@ -295,11 +295,11 @@ run_folder_cleanup() {
             continue
         fi
         
-        new_dir="$base_save_dir/${dir_name}-mindre-filer"
+        new_dir="$base_save_dir/${dir_name}-temp-file"
         mkdir -p "$new_dir"
         
         mv "$video_file" "$new_dir/"
-        echo "Flyttade liten fil: $(basename "$video_file") -> ${dir_name}-mindre-filer/"
+        echo "Flyttade liten fil: $(basename "$video_file") -> ${dir_name}-temp-file/"
     done
 
     find "$base_save_dir" -mindepth 1 -type d -empty -delete
@@ -402,28 +402,40 @@ while true; do
         fi
         # ----------------------------------------------------------------------
 
-        # --- NY FUNKTION: HTML-LOGGEXPORT via export(log) (v0.3.8) ---
+        # --- NY FUNKTION: HTML-LOGGEXPORT MED PAGINATION (Sida 9 i PDF) ---
         if [[ "$item" == "export(log)" || "$item" == "Export(log)" || "$item" == "EXPORT(LOG)" ]]; then
-            echo "--- Manuellt kommando: Exporterar loggfiler till HTML ---"
-            
+            echo "--- Manuellt kommando: Exporterar loggfiler till interaktiv HTML ---"
             log_mapp="$script_dir/log"
             
-            # 1. Skapa log/index.html (HTML-strukturen)
+            # 1. Skapa log/index.html (HTML-strukturen med knappar för pagination)
             cat << 'EOF' > "$log_mapp/index.html"
 <!doctype html>
 <html lang="sv">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Läs lokal text utan server</title>
+<title>Stream Recorder - Logghistorik</title>
 <style>
     body { font-family: monospace; background-color: #1e1e1e; color: #d4d4d4; padding: 20px; }
-    pre { white-space: pre-wrap; word-wrap: break-word; background: #252526; padding: 15px; border-radius: 5px; }
+    h2 { color: #569cd6; border-bottom: 1px solid #3c3c3c; padding-bottom: 10px; }
+    pre { white-space: pre-wrap; word-wrap: break-word; background: #252526; padding: 15px; border-radius: 5px; min-height: 320px; line-height: 1.5; }
+    .pagination-controls { margin-top: 15px; display: flex; gap: 10px; align-items: center; }
+    button { background-color: #3c3c3c; color: #ffffff; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-family: monospace; }
+    button:hover { background-color: #007acc; }
+    button:disabled { background-color: #2d2d2d; color: #5a5a5a; cursor: not-allowed; }
+    #pageInfo { font-size: 14px; color: #858585; }
 </style>
 </head>
 <body>
 <h2>Stream Recorder - Logghistorik</h2>
 <pre id="fileContent">Hämtar lokal data...</pre>
+
+<div class="pagination-controls">
+    <button id="prevBtn" disabled>Föregående</button>
+    <span id="pageInfo">Sida 1 av 1</span>
+    <button id="nextBtn" disabled>Nästa</button>
+</div>
+
 <!-- 1. Ladda textfilen först -->
 <script src="logData.js"></script>
 <!-- 2. Ladda logiken sen -->
@@ -432,32 +444,72 @@ while true; do
 </html>
 EOF
 
-            # 2. Skapa log/simplelog.js (JavaScript-logiken)
+            # 2. Skapa log/simplelog.js (Avancerad sidbläddringslogik för 15 rader)
             cat << 'EOF' > "$log_mapp/simplelog.js"
-// Körs så fort sidan öppnas
 window.addEventListener("DOMContentLoaded", () => {
-    // Variabeln från logData.js är tillgänglig direkt
-    if (typeof minTextData !== "undefined") {
-        document.getElementById("fileContent").textContent = minTextData;
-    } else {
+    if (typeof minTextData === "undefined") {
         document.getElementById("fileContent").textContent = "Kunde inte hitta logdata.js";
+        return;
     }
+
+    // Dela upp hela loggtexten i en array baserat på radbrytningar
+    const allLines = minTextData.trim().split("\n").filter(line => line.length > 0);
+    const linesPerPage = 15;
+    let currentPage = 1;
+    const totalPages = Math.ceil(allLines.length / linesPerPage) || 1;
+
+    const contentDisplay = document.getElementById("fileContent");
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const pageInfo = document.getElementById("pageInfo");
+
+    function displayPage(page) {
+        contentDisplay.textContent = "";
+        
+        // Räkna ut start och slut för de 15 raderna
+        const start = (page - 1) * linesPerPage;
+        const end = start + linesPerPage;
+        const pageLines = allLines.slice(start, end);
+
+        // Skriv ut de valda raderna på skärmen
+        contentDisplay.textContent = pageLines.join("\n");
+        pageInfo.textContent = `Sida ${page} av ${totalPages} (Totalt ${allLines.length} loggader)`;
+
+        // Aktivera eller inaktivera knappar beroende på var vi är
+        prevBtn.disabled = (page === 1);
+        nextBtn.disabled = (page === totalPages);
+    }
+
+    prevBtn.addEventListener("click", () => {
+        if (currentPage > 1) {
+            currentPage--;
+            displayPage(currentPage);
+        }
+    });
+
+    nextBtn.addEventListener("click", () => {
+        if (currentPage < totalPages) {
+            currentPage++;
+            displayPage(currentPage);
+        }
+    });
+
+    // Visa första sidan direkt vid start
+    displayPage(currentPage);
 });
 EOF
 
-            # 3. Skapa log/logData.js och klistra in innehållet från stream_history.log dynamiskt
+            # 3. Skapa log/logData.js (Samma som förut)
             echo "// Konfidentiellt: Texten sparas i en global variabel" > "$log_mapp/logData.js"
             echo "const minTextData = \`" >> "$log_mapp/logData.js"
-            
             if [[ -f "$log_file" ]]; then
                 cat "$log_file" >> "$log_mapp/logData.js"
             else
                 echo "[Ingen logghistorik hittades ännu]" >> "$log_mapp/logData.js"
             fi
-            
             echo "\`;" >> "$log_mapp/logData.js"
 
-            echo "-> Export klar! Filerna index.html, simplelog.js och logData.js har skapats i mappen: $log_mapp"
+            echo "-> Export klar! Interaktiv webb-logg med sidbläddring har skapats i: $log_mapp"
             continue
         fi
         # ----------------------------------------------------------------------
