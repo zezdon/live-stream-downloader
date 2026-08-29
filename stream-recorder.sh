@@ -5,7 +5,7 @@
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
 
 # --- KONFIGURATION ---
-script_version="v0.4.2" # UPPDATERAD VERSION
+script_version="v0.4.3" # UPPDATERAD VERSION
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -22,7 +22,8 @@ size_config_file="$settings_dir/.file_size_config"
 sleep_config_file="$settings_dir/.sleep_config"
 
 global_pid_file="/tmp/streamrecorder.pid"
-test_cron_file="$script_dir/crontab.txt"
+cron_mapp="$script_dir/crontab"
+test_cron_file="$cron_mapp/crontab.txt"
 # ---------------------
 
 # Räknare för crontab.txt testfilen
@@ -55,6 +56,7 @@ rm -f /tmp/streamrecorder.pid 2>/dev/null
 mkdir -p "$temp_dir"
 mkdir -p "$script_dir/log"
 mkdir -p "$settings_dir"
+mkdir -p "$cron_mapp" # NYTT: Skapar mappen crontab/ bredvid skriptet
 echo "$script_version" > "$script_dir/VERSION.txt"
 
 # Skriv ut versionen direkt vid start
@@ -501,6 +503,124 @@ EOF
         fi
         # ----------------------------------------------------------------------
 
+        # --- NY FUNKTION: print("valfri text") (v0.4.4) ---
+        if [[ "$item" == print\(* || "$item" == Print\(* || "$item" == PRINT\(* ]]; then
+            # Klipp ut texten som står inuti citationstecknen
+            print_text=$(echo "$item" | sed -E 's/^[pP]rint\("(.*)"\)$/\1/')
+            echo "$print_text"
+            continue
+        fi
+
+        # --- NY FUNKTION: HTML-CRONTABEXPORT via export(crontab) (v0.4.4) ---
+        if [[ "$item" == "export(crontab)" || "$item" == "Export(crontab)" || "$item" == "EXPORT(CRONTAB)" ]]; then
+            echo "--- Manuellt kommando: Exporterar crontab-historik till HTML ---"
+            
+            # 1. Skapa crontab/index.html (HTML-struktur för Crontab-visaren)
+            cat << 'EOF' > "$cron_mapp/index.html"
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Stream Recorder - Crontab-historik</title>
+<style>
+    body { font-family: monospace; background-color: #1e1e1e; color: #d4d4d4; padding: 20px; }
+    h2 { color: #4ec9b0; border-bottom: 1px solid #3c3c3c; padding-bottom: 10px; margin-bottom: 5px; }
+    .status-bar { font-size: 12px; color: #569cd6; margin-bottom: 15px; }
+    pre { white-space: pre-wrap; word-wrap: break-word; background: #252526; padding: 15px; border-radius: 5px; min-height: 320px; line-height: 1.5; }
+    .pagination-controls { margin-top: 15px; display: flex; gap: 10px; align-items: center; }
+    button { background-color: #3c3c3c; color: #ffffff; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-family: monospace; }
+    button:hover { background-color: #007acc; }
+    button:disabled { background-color: #2d2d2d; color: #5a5a5a; cursor: not-allowed; }
+    #pageInfo { font-size: 14px; color: #858585; }
+</style>
+</head>
+<body>
+<h2>Stream Recorder - Crontab-historik</h2>
+<div class="status-bar">✓ Synkar live mot crontab.txt (Uppdateras automatiskt var 30:e sekund)</div>
+<pre id="fileContent">Hämtar lokal data...</pre>
+
+<div class="pagination-controls">
+    <button id="prevBtn" disabled>Föregående</button>
+    <span id="pageInfo">Sida 1 av 1</span>
+    <button id="nextBtn" disabled>Nästa</button>
+</div>
+
+<script src="simplecrontab.js"></script>
+</body>
+</html>
+EOF
+
+            # 2. Skapa crontab/simplecrontab.js (Pagination + Auto-reload för Crontab)
+            cat << 'EOF' > "$cron_mapp/simplecrontab.js"
+window.addEventListener("DOMContentLoaded", () => {
+    let currentPage = 1;
+    const linesPerPage = 15;
+
+    const contentDisplay = document.getElementById("fileContent");
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const pageInfo = document.getElementById("pageInfo");
+
+    function renderLog() {
+        if (typeof minTextData === "undefined") {
+            contentDisplay.textContent = "Väntar på data från logCrontab.js...";
+            return;
+        }
+
+        const allLines = minTextData.trim().split("\n").filter(line => line.length > 0);
+        const totalPages = Math.ceil(allLines.length / linesPerPage) || 1;
+
+        if (currentPage > totalPages) currentPage = totalPages;
+
+        const start = (currentPage - 1) * linesPerPage;
+        const end = start + linesPerPage;
+        const pageLines = allLines.slice(start, end);
+
+        contentDisplay.textContent = pageLines.join("\n");
+        pageInfo.textContent = `Sida ${currentPage} av ${totalPages} (Totalt ${allLines.length} körningar)`;
+
+        prevBtn.disabled = (currentPage === 1);
+        nextBtn.disabled = (currentPage === totalPages);
+    }
+
+    function refreshDataFromFile() {
+        const oldScript = document.getElementById("dynamicCronData");
+        if (oldScript) oldScript.remove();
+
+        const newScript = document.createElement("script");
+        newScript.id = "dynamicCronData";
+        newScript.src = "logCrontab.js?t=" + new Date().getTime();
+        
+        newScript.onload = () => {
+            renderLog();
+        };
+
+        document.body.appendChild(newScript);
+    }
+
+    prevBtn.addEventListener("click", () => { if (currentPage > 1) { currentPage--; renderLog(); } });
+    nextBtn.addEventListener("click", () => { currentPage++; renderLog(); });
+
+    refreshDataFromFile();
+    setInterval(refreshDataFromFile, 30000);
+});
+EOF
+
+            # 3. Skapa crontab/logCrontab.js och dumpa crontab.txt inuti datavariabeln
+            echo "// Sparar crontab-historik i en global variabel" > "$cron_mapp/logCrontab.js"
+            echo "const minTextData = \`" >> "$cron_mapp/logCrontab.js"
+            if [[ -f "$test_cron_file" ]]; then
+                cat "$test_cron_file" >> "$cron_mapp/logCrontab.js"
+            else
+                echo "[Ingen crontab-historik hittades ännu]" >> "$cron_mapp/logCrontab.js"
+            fi
+            echo "\`;" >> "$cron_mapp/logCrontab.js"
+
+            echo "-> Export klar! Interaktiv crontab-logg har skapats i mappen: $cron_mapp"
+            continue
+        fi
+
         # SKOTTSÄKER DYNAMISK OVERWRITE
         if [[ "$item" == overwrite\(* || "$item" == Overwrite\(* ]]; then
             if [[ "$item" == *"yes"* ]]; then
@@ -644,16 +764,12 @@ EOF
         # Bestäm om vi ska köra med eller utan tidsbegränsning (timeout)
         if [[ -n "$custom_timeout" ]]; then
             # Linux timeout skickar en signal (SIGINT) efter X sekunder så att inspelningen sparas snyggt
-            # timeout --signal=SIGINT "$custom_timeout" yt-dlp -f "bv*+ba+ba.2" --audio-multistreams "$current_overwrite_mode" "${ffmpeg_args[@]}" \
-            #     -o "$output_template" "$url" </dev/null 2>$debug_output
             timeout --signal=SIGINT "$custom_timeout" yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
                 -o "$output_template" "$url" </dev/null 2>$debug_output
         else
-            # # Standardkörning utan tidsbegränsning som förut
-            # yt-dlp -f "bv*+ba+ba.2" --audio-multistreams "$current_overwrite_mode" "${ffmpeg_args[@]}" \
-            #     -o "$output_template" "$url" </dev/null 2>$debug_output
+            # Standardkörning utan tidsbegränsning som förut
             yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
-                -o "$output_template" "$url" </dev/null 2>$debug_output            
+                -o "$output_template" "$url" </dev/null 2>$debug_output
         fi
         status=$?
 
