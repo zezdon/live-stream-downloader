@@ -5,7 +5,7 @@
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
 
 # --- KONFIGURATION ---
-script_version="v0.4.3" # UPPDATERAD VERSION
+script_version="v0.4.4" # UPPDATERAD VERSION
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -293,6 +293,58 @@ run_folder_cleanup() {
     echo "Mapp- och filhanteringen är klar."
 }
 
+# --- NY EXKLUSIV PART-STÄDFUNKTION FÖR clear(part) (v0.4.5) ---
+run_part_cleanup() {
+    echo "Rensar tomma mappar men behåller dina inspelningar..."
+    find "$base_save_dir" -mindepth 1 -type d -empty -delete
+
+    echo "Letar efter avbrutna inspelningar (.part-filer)..."
+    find "$base_save_dir" -type f -name "*.mp4.part" -size -"$min_file_size" | while read -r junk_part; do
+        parent_dir=$(basename "$(dirname "$junk_part")")
+        lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
+        is_active="no"
+        for l_file in $lock_match; do
+            r_pid=$(sed -n '1p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            l_folder=$(sed -n '2p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+                if [[ "${l_folder,,}" == "${parent_dir,,}" ]]; then
+                    is_active="yes"
+                    break
+                fi
+            fi
+        done
+        if [[ "$is_active" == "no" ]]; then
+            rm -f "$junk_part" 2>/dev/null
+        fi
+    done
+    
+    find "$base_save_dir" -type f -name "*.mp4.part" | while read -r part_file; do
+        parent_dir=$(basename "$(dirname "$part_file")")
+        lock_match=$(find "$temp_dir" -name "*.lock" -type f 2>/dev/null)
+        is_active="no"
+        for l_file in $lock_match; do
+            r_pid=$(sed -n '1p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            l_folder=$(sed -n '2p' "$l_file" 2>/dev/null | tr -d '\r\n\t ')
+            if [[ -n "$r_pid" ]] && kill -0 "$r_pid" 2>/dev/null; then
+                if [[ "${l_folder,,}" == "${parent_dir,,}" ]]; then
+                    is_active="yes"
+                    break
+                fi
+            fi
+        done
+        
+        if [[ "$is_active" == "no" ]]; then
+            new_file="${part_file%.mp4.part}-was-interrupted.mp4"
+            mv "$part_file" "$new_file"
+            echo "Fixade fil: $(basename "$part_file") -> $(basename "$new_file")"
+        fi
+    done
+
+    # OBS: Sorteringsblocket för -temp-file är HELT BORTTAGET här!
+    find "$base_save_dir" -mindepth 1 -type d -empty -delete
+    echo "Part- och filhanteringen är klar."
+}
+
 cleanup_and_exit() {
     echo -e "\n"
     # --- UPPDATERING I CLEANUP_AND_EXIT ---
@@ -387,6 +439,13 @@ while true; do
         if [[ "$item" == clear\(folder\) || "$item" == Clear\(folder\) || "$item" == CLEAR\(FOLDER\) ]]; then
             echo "--- Manuellt kommando: Startar automatisk mapp- och filrensning ---"
             run_folder_cleanup
+            continue
+        fi
+
+        # --- NYTT KOMMANDO: clear(part) (v0.4.5) ---
+        if [[ "$item" == clear\(part\) || "$item" == Clear\(part\) || "$item" == CLEAR\(PART\) ]]; then
+            echo "--- Manuellt kommando: Startar exklusiv part-filslagning (Ingen -temp-file sortering) ---"
+            run_part_cleanup
             continue
         fi
         # ----------------------------------------------------------------------

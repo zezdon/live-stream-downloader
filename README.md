@@ -120,6 +120,19 @@ När skriptet når raden `clear(folder)` körs följande procedur helt automatis
 2. **Hanterar avbrutna filer:** Tar automatiskt bort `.part`-filändelsen på inspelningar som avbrutits och markerar dem med `-avbruten.mp4` i filnamnet så att de blir vanliga spelbara videofiler.
 3. **Sorterar mindre videofiler:** Hittar färdiga videofiler som är mindre än 100 MB (ofta korta testklipp eller skräpfiler från streams som snabbt gått ner) och flyttar dem till en separat undermapp märkt med `-mindre-filer` i slutet.
 
+---
+
+## Flexibel filhantering: `clear(folder)` vs `clear(part)`
+
+Skriptet erbjuder två olika nivåer för automatisk bakgrundsstädning direkt via din textfil. Detta ger dig full kontroll över hur dina inspelade filer ska hanteras:
+
+### 1. Fullständig städning: `clear(folder)`
+Detta kommando utför en totalrensning. Det tar bort tomma mappar, lagar avbrutna `.part`-filer till spelbara `-was-interrupted.mp4`-filer, **samt hittar korta testklipp och flyttar dem till en separat undermapp märkt med `-temp-file`**. 
+
+### 2. Lättare part-städning: `clear(part)`
+Detta är det **rekommenderade kommandot om du vill att dina videofiler alltid ska ligga kvar i sina ursprungliga mappar**, oavsett hur små eller korta de är. 
+När skriptet stöter på `clear(part)` raderas tomma mappar och trasiga `.part`-filer lagas klockrent till `-was-interrupted.mp4`, men **sorteringsblocket hoppas över helt och hållet**. Dina färdiga `.mp4`-filer lämnas i fullständig fred.
+
 ## Visa loggfiler i webbläsaren: `export(log)`
 
 Om du vill få en snyggare, mer interaktiv och lättläst översikt av din inspelningshistorik (`stream_history.log`) kan du exportera hela loggen till en modern webbsida (HTML/JavaScript) direkt i ditt system. 
@@ -184,6 +197,19 @@ initclean(no)
 overwrite(dirkeep)
 
 # Dina kanaler...
+```
+## Skriva egna statusmeddelanden: `print("text")`
+
+När skriptet körs rad för rad kan det ibland vara skönt att få egna, beskrivande texter utskrivna på skärmen (eller i din crontab-logg) för att veta exakt var i listan skriptet befinner sig. 
+
+Du kan lägga till egna meddelanden var du vill i din textfil med kommandot `print()`:
+
+*Exempel:*
+```text
+print("--- Startar kvällens scanning av Twitch-listan ---")
+url(https://twitch.tv, "firelea")
+delay(4)
+print("--- Scanning klar, påbörjar live-export av webbpaneler ---")
 ```
 ## Avsluta skriptet automatiskt: `exit(quit)` och `exit(clean)`
 
