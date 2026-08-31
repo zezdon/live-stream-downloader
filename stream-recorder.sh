@@ -5,7 +5,7 @@
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
 
 # --- KONFIGURATION ---
-script_version="v0.4.4" # UPPDATERAD VERSION
+script_version="v0.4.5" # UPPDATERAD VERSION
 script_dir=$(dirname "$(readlink -f "$0")")
 script_name="${0##*/}"
 script_base="${script_name%.sh}"
@@ -823,12 +823,16 @@ EOF
         # Bestäm om vi ska köra med eller utan tidsbegränsning (timeout)
         if [[ -n "$custom_timeout" ]]; then
             # Linux timeout skickar en signal (SIGINT) efter X sekunder så att inspelningen sparas snyggt
-            timeout --signal=SIGINT "$custom_timeout" yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
-                -o "$output_template" "$url" </dev/null 2>$debug_output
+            # timeout --signal=SIGINT "$custom_timeout" yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
+            #     -o "$output_template" "$url" </dev/null 2>$debug_output
+            timeout --signal=SIGINT "$custom_timeout" yt-dlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4] / bv*+ba/b" --embed-metadata --embed-thumbnail --ignore-errors "$current_overwrite_mode" "${ffmpeg_args[@]}" \
+                -o "$output_template" "$url" </dev/null 2>$debug_output                
         else
             # Standardkörning utan tidsbegränsning som förut
-            yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
-                -o "$output_template" "$url" </dev/null 2>$debug_output
+            # yt-dlp --hls-use-mpegts --ignore-errors --no-check-certificate "$current_overwrite_mode" "${ffmpeg_args[@]}" \
+            #     -o "$output_template" "$url" </dev/null 2>$debug_output
+            yt-dlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4] / bv*+ba/b" --embed-metadata --embed-thumbnail --ignore-errors "$current_overwrite_mode" "${ffmpeg_args[@]}" \
+                -o "$output_template" "$url" </dev/null 2>$debug_output                
         fi
         status=$?
 
